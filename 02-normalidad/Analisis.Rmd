@@ -1,0 +1,61 @@
+---
+title: "EDAD EN BANCA"
+author: "Erick Marroquín"
+date: "2026-01-26"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Análisis de promo "Adulto Mayor con Pisto"
+
+## Exploracion
+```{r}
+library(nortest)
+
+churn <- read.csv("Churn_Modelling.csv")
+
+str(churn)
+summary(churn)
+nrow(churn)
+```
+
+Como podemos observar la edad (en años está en el tipo de datos correcto)
+
+## Graficos
+```{r}
+hist(churn$Age)
+
+boxplot(churn$Age)
+```
+
+Es evidente que la edad NO tiene una distribución normal. Gráficamente lo hemos confirmado pero es necesario una prueba de lilliforce para determinar esto con exactitud.
+
+## Prueba Lilliforce
+```{r}
+cuant_discretas <- c(
+  "CreditScore",
+  "Tenure",
+  "NumOfProducts"
+)
+
+cuant_continuas <- c(
+  "Age",
+  "Balance",
+  "EstimatedSalary"
+)
+
+cuantitativas <- c(cuant_discretas, cuant_continuas)
+
+datos_cuant <- churn[, cuantitativas]
+
+lillie_results <- lapply(datos_cuant, lillie.test)
+
+lillie_results$Age
+```
+
+Como podemos ver el valor p es mucho menor al criterio de 0.05 por lo que aceptamos la H1 y concuimos que la data no tienen una distribución normal.

@@ -1,0 +1,113 @@
+---
+title: "Clustering"
+author: "Erick Marroquín"
+date: "2026-01-26"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Ejemplo de clustering  
+
+En este documento se presenta un ejemplo completo de **agrupamiento (clustering)** utilizando técnicas de aprendizaje no supervisado.  
+El objetivo del clustering es **identificar grupos naturales en los datos**, sin utilizar una variable respuesta.
+
+```{r paquetes necesarios, message=FALSE,warning=FALSE}
+library(cluster)
+library(e1071)
+library(mclust)
+library(fpc)
+library(NbClust)
+library(factoextra)
+library(hopkins)
+library(GGally)
+library(FeatureImpCluster)
+library(pheatmap)
+```
+
+## Descripción de los Datos  
+
+Vamos a trabajar con la base de datos **iris**, la cual contiene `r nrow(iris)` observaciones y `r ncol(iris)` variables.
+
+```{r carga de datos}
+datos <- iris
+set.seed(123)
+datos <- datos[complete.cases(iris),]
+summary(datos)
+```
+
+```{r escalado de los datos}
+datos[,1:4] <- scale(datos[,1:4])
+```
+
+## ¿Hacemos Agrupamiento?  
+
+```{r hopkins}
+set.seed(123)
+hopkins(datos[,1:4])
+```
+
+```{r Evaluación Visual de Tendencia}
+datos_dist <- dist(datos[,1:4])
+fviz_dist(datos_dist, show_labels = FALSE)
+```
+
+## ¿Cuántos grupos debemos hacer?  
+
+```{r metodo de codo}
+wss = 0
+for (i in 1:10) 
+  wss[i] <- sum(kmeans(iris[,1:4], centers=i)$withinss)
+
+plot(1:10, wss, type="b",
+     xlab="Número de Clusters",
+     ylab="Suma de cuadrados dentro del grupo")
+```
+
+```{r metodo de codo factoextra}
+fviz_nbclust(datos[,1:4], kmeans, method = "wss")
+```
+
+```{r silueta factoextra}
+fviz_nbclust(datos[,1:4], kmeans, method = "silhouette")
+```
+
+```{r gap factoextra}
+fviz_nbclust(datos[,1:4], kmeans,
+             nstart = 25,
+             method = "gap_stat",
+             nboot = 50,
+             verbose = FALSE)
+```
+
+```{r nbClust}
+NbClust(datos[,1:4],
+        distance = "euclidean",
+        min.nc = 2,
+        max.nc = 10,
+        method ="complete",
+        index ="all")
+```
+
+## Algoritmos de Agrupamiento  
+
+```{r kmedias}
+km <- kmeans(datos[,1:4], 3, iter.max = 100)
+datos$grupo <- km$cluster
+```
+
+```{r resumen de las kmedias}
+km
+```
+
+```{r visualización con plotcluster}
+plotcluster(datos[,1:4], km$cluster)
+```
+
+```{r visualización con fviz_cluster}
+fviz_cluster(km, data = datos[,1:4], geom = "point", ellipse.type = "norm")
+```

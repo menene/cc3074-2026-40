@@ -1,4 +1,7 @@
-# Analisis exploratorio
+############################################################
+# ANÁLISIS EXPLORATORIO
+# Dataset: Titanic-Dataset.csv
+############################################################
 
 # 1. Cargar librerías
 library(tidyverse)
