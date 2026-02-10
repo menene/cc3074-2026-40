@@ -1,0 +1,166 @@
+---
+title: "A Priori"
+author: "Erick Marroquín"
+output:
+  html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 1. Contexto y objetivo
+
+En este análisis se utiliza el algoritmo Apriori para explorar patrones frecuentes
+y reglas de asociación en datos transaccionales.
+
+La secuencia del análisis sigue los pasos conceptuales vistos en clase:
+
+1. Identificar los grupos que más se repiten  
+2. Calcular el soporte de esos grupos  
+3. Generar reglas de asociación a partir de ellos  
+4. Calcular soporte, confianza y lift  
+5. Analizar los resultados gráficamente  
+
+# 2. Carga de librerías y datos
+
+```{r}
+library(arules)
+library(arulesViz)
+```
+
+Información sobre los datos
+
+```{r}
+data(Groceries)
+Groceries
+```
+
+```{r}
+summary(Groceries)
+```
+
+# 3. Ítems más frecuentes
+
+Antes de analizar grupos de ítems, observamos qué productos aparecen con mayor frecuencia.
+
+```{r}
+itemFrequency(Groceries)[1:10]
+```
+
+```{r}
+itemFrequencyPlot(Groceries, topN = 20, type = "absolute")
+```
+
+# 4. Conjuntos de ítems frecuentes
+
+Identificamos los **conjuntos de ítems que se repiten con mayor frecuencia** en las transacciones.
+
+```{r}
+itemsets_freq <- apriori(
+  Groceries,
+  parameter = list(
+    target = "frequent itemsets",
+    supp = 0.01,
+    minlen = 2
+  )
+)
+```
+
+```{r}
+itemsets_freq
+```
+
+```{r}
+inspect(head(sort(itemsets_freq, by = "support"), 10))
+```
+
+# 5. Análisis del soporte de los conjuntos
+
+```{r}
+itemsets_df <- as(itemsets_freq, "data.frame")
+head(itemsets_df)
+```
+
+```{r}
+summary(itemsets_df$support)
+```
+
+El soporte indica la proporción de transacciones que contienen un conjunto específico de ítems.
+
+# 6. Generación de reglas de asociación
+
+A partir de los conjuntos frecuentes, se generan reglas del tipo **Antecedente → Consecuente**.
+
+```{r}
+rules <- apriori(
+  Groceries,
+  parameter = list(
+    supp = 0.01,
+    conf = 0.3
+  )
+)
+```
+
+```{r}
+rules
+```
+
+# 7. Soporte, confianza y lift
+
+```{r}
+summary(rules)
+```
+
+```{r}
+inspect(head(sort(rules, by = "lift"), 10))
+```
+
+- **Soporte**: frecuencia de la regla  
+- **Confianza**: probabilidad del consecuente dado el antecedente  
+- **Lift**: fuerza real de la asociación  
+
+# 8. Filtrado de reglas relevantes
+
+```{r}
+rules_filtered <- subset(
+  rules,
+  subset = lift > 1.5 & confidence > 0.5
+)
+```
+
+```{r}
+inspect(rules_filtered)
+```
+
+# 9. Visualización de resultados
+
+## 9.1 Soporte vs Confianza
+
+```{r}
+plot(
+  rules_filtered,
+  method = "scatterplot",
+  measure = c("support", "confidence"),
+  shading = "lift"
+)
+```
+
+## 9.2 Grafo de reglas de asociación
+
+```{r}
+plot(
+  rules_filtered,
+  method = "graph",
+  engine = "htmlwidget"
+)
+```
+
+# 10. Conclusiones
+
+- Los ítems frecuentes dominan los conjuntos frecuentes.
+- El soporte permite descartar patrones poco representativos.
+- No todas las reglas con alto soporte son interesantes.
+- El lift ayuda a identificar asociaciones no triviales.
+- Las visualizaciones facilitan la interpretación global.
+- Apriori es una herramienta exploratoria para generar conocimiento descriptivo.

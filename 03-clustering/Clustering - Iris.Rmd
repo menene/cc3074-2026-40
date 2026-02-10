@@ -1,0 +1,184 @@
+---
+title: "Clustering - Iris"
+author: "Erick Marroquín"
+date: "2026-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Objetivo
+
+El objetivo de este ejercicio es aplicar técnicas de clustering (aprendizaje no supervisado) al conjunto de datos Iris, realizando:
+
+* Análisis Exploratorio de Datos (EDA)
+* Preparación y estandarización de variables
+* Determinación del número óptimo de clusters
+* Construcción de modelos de clustering
+* Validación y evaluación de los resultados
+
+# 2. Carga de librerías y datos
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(cluster)
+library(factoextra)
+library(GGally)
+```
+
+```{r}
+data(iris)
+df <- iris
+head(df)
+```
+
+# 3. Análisis Exploratorio de Datos
+
+## 3.1 Estructura del dataset
+
+```{r}
+str(df)
+summary(df)
+```
+
+El dataset contiene 150 observaciones y 5 variables, donde *Species* corresponde a la etiqueta real (que **no se usará para entrenar** el modelo de clustering).
+
+## 3.2 Visualización exploratoria
+
+```{r}
+GGally::ggpairs(df, columns = 1:4, aes(color = Species))
+```
+
+Se observa que algunas variables presentan separación natural entre especies, especialmente *Petal.Length* y *Petal.Width*.
+
+# 4. Preparación de los datos
+
+Para clustering solo se utilizan variables numéricas. Además, se estandarizan (mísma escala) para evitar sesgos por escala.
+
+```{r}
+df_num <- df %>% select(-Species)
+df_scaled <- scale(df_num)
+```
+
+# 5. Determinación del número óptimo de clusters
+
+## 5.1 Método del codo (Elbow Method)
+
+```{r}
+fviz_nbclust(df_scaled, kmeans, method = "wss")
+```
+
+**Criterio de selección:**
+
+El método del codo analiza la suma de cuadrados intra-cluster (WSS) para distintos valores de k. A medida que aumenta el número de clusters, la WSS disminuye porque los grupos son más pequeños y homogéneos.
+
+El valor óptimo de k se identifica en el punto donde la disminución de la WSS deja de ser pronunciada y comienza a estabilizarse, formando un "codo" en la gráfica. A partir de ese punto, agregar más clusters no aporta una mejora significativa al modelo.
+
+## 5.2 Método de la silueta
+
+```{r}
+fviz_nbclust(df_scaled, kmeans, method = "silhouette")
+```
+
+**Criterio de selección:**
+
+El método de la silueta evalúa qué tan bien está asignada cada observación a su cluster. El coeficiente de silueta toma valores entre -1 y 1:
+
+* Valores cercanos a **1** indican que la observación está bien agrupada.
+* Valores cercanos a **0** indican solapamiento entre clusters.
+* Valores negativos sugieren una mala asignación.
+
+El número óptimo de clusters corresponde al valor de k que maximiza el coeficiente promedio de silueta, indicando una separación clara entre los grupos.
+
+Con base en ambos métodos, k = 3 es una elección razonable.
+
+# 6. Clustering con K-means
+
+## 6.1 ¿Cómo funciona el algoritmo K-means?
+
+K-means es un algoritmo de aprendizaje no supervisado que busca particionar los datos en *k* clusters, minimizando la variabilidad interna de cada grupo. Su funcionamiento puede resumirse en los siguientes pasos:
+
+1. **Inicialización:** Se seleccionan aleatoriamente *k* centroides iniciales.
+2. **Asignación:** Cada observación se asigna al centroide más cercano (usualmente usando distancia euclidiana).
+3. **Actualización:** Para cada cluster, se recalcula el centroide como el promedio de las observaciones asignadas.
+4. **Iteración:** Los pasos 2 y 3 se repiten hasta que los centroides dejan de cambiar o se alcanza un criterio de convergencia.
+
+El objetivo del algoritmo es minimizar la *suma de distancias cuadradas* entre cada observación y el centroide de su cluster.
+
+## 6.2 Entrenamiento del modelo
+
+```{r}
+set.seed(123)
+kmeans_model <- kmeans(df_scaled, centers = 3, nstart = 25)
+```
+
+```{r}
+str(kmeans_model)
+```
+
+## 6.1 Visualización de los clusters
+
+```{r}
+fviz_cluster(kmeans_model, data = df_scaled,
+             geom = "point",
+             ellipse.type = "convex",
+             ggtheme = theme_minimal())
+```
+
+# 7. Validación del clustering
+
+## 7.1 Coeficiente de silueta
+
+```{r}
+sil <- silhouette(kmeans_model$cluster, dist(df_scaled))
+summary(sil)
+```
+En datos reales:
+
+Valores > 0.7 → raro de encontrar
+
+Valores > 0.5 → muy buenos
+
+Valores 0.3 – 0.5 → aceptables / buenos
+
+Valores < 0.25 → mal clustering
+
+```{r}
+fviz_silhouette(sil)
+```
+
+Valores positivos y cercanos a 1 indican una buena asignación de los clusters.
+
+## 7.2 Comparación con las clases reales
+
+> **Nota:** Esta comparación es solo con fines de evaluación, ya que el modelo es no supervisado.
+
+```{r}
+cluster_vs_species <- table(Cluster = kmeans_model$cluster, Species = df$Species)
+cluster_vs_species
+```
+
+Se observa una correspondencia razonable entre los clusters generados y las especies reales, especialmente para setosa.
+
+# 8. Clustering jerárquico
+
+```{r}
+dist_matrix <- dist(df_scaled)
+hc <- hclust(dist_matrix, method = "ward.D2")
+```
+
+```{r}
+plot(hc, labels = FALSE, hang = -1)
+rect.hclust(hc, k = 3, border = 2:4)
+```
+
+# 9. Conclusiones
+
+* La estandarización fue clave para aplicar clustering correctamente.
+* K-means con k = 3 produce clusters coherentes con las especies reales.
+* El coeficiente de silueta respalda la calidad de la clusterización.
+* El clustering jerárquico confirma una estructura similar en los datos.
+
+Este ejercicio demuestra cómo aplicar y validar técnicas de aprendizaje no supervisado sobre un dataset clásico.
