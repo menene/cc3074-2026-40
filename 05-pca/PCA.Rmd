@@ -20,8 +20,8 @@ library(factoextra)
 ## Carga de datos
 
 ```{r}
-datos <- read.csv("sample-pca.csv")
-# datos <- read.csv("Ejemplo.csv")
+# datos <- read.csv("sample-pca.csv")
+datos <- read.csv("Ejemplo.csv")
 str(datos)
 ```
 
@@ -59,7 +59,7 @@ matriz <- cor(datos_num, use = "pairwise.complete.obs")
 corrplot(matriz,
          method = "color",
          type = "upper",
-         addCoef.col = "black",
+         addCoef.col = "white",
          tl.col = "black",
          tl.srt = 45)
 ```

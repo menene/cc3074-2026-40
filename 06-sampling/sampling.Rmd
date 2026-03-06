@@ -1,0 +1,146 @@
+---
+title: "Sampling"
+author: "Erick Marroquín"
+output:
+  html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Introducción
+
+En aprendizaje supervisado es fundamental dividir los datos en:
+
+- Conjunto de entrenamiento
+- Conjunto de prueba
+
+Esto permite evaluar la capacidad de generalización del modelo.
+
+Usaremos el dataset `iris`.
+
+```{r}
+data(iris)
+head(iris)
+```
+
+---
+
+# 2. Muestreo Aleatorio Simple
+
+Cada observación tiene la misma probabilidad de ser seleccionada.
+
+```{r}
+set.seed(123)
+
+porciento <- 0.7
+numFilasTrain <- sample(nrow(iris), porciento * nrow(iris))
+
+train_simple <- iris[numFilasTrain, ]
+test_simple  <- iris[-numFilasTrain, ]
+```
+
+## Distribución original
+
+```{r}
+table(iris$Species)
+```
+
+## Distribución en entrenamiento (simple)
+
+```{r}
+table(train_simple$Species)
+```
+
+## Distribución en prueba (simple)
+
+```{r}
+table(test_simple$Species)
+```
+
+---
+
+# 3. Muestreo Estratificado
+
+Se mantiene la proporción original de cada clase.
+
+```{r}
+setosas      <- iris[iris$Species == "setosa", ]
+versicolors  <- iris[iris$Species == "versicolor", ]
+virginicas   <- iris[iris$Species == "virginica", ]
+
+train_setosa <- sample(nrow(setosas), porciento * nrow(setosas))
+train_versi  <- sample(nrow(versicolors), porciento * nrow(versicolors))
+train_virg   <- sample(nrow(virginicas), porciento * nrow(virginicas))
+
+train_strat <- rbind(
+  setosas[train_setosa, ],
+  versicolors[train_versi, ],
+  virginicas[train_virg, ]
+)
+
+test_strat <- rbind(
+  setosas[-train_setosa, ],
+  versicolors[-train_versi, ],
+  virginicas[-train_virg, ]
+)
+```
+
+## Distribución en entrenamiento (estratificado)
+
+```{r}
+table(train_strat$Species)
+```
+
+## Distribución en prueba (estratificado)
+
+```{r}
+table(test_strat$Species)
+```
+
+---
+
+# 4. Reproducibilidad con set.seed()
+
+Sin semilla:
+
+```{r}
+sample(1:10, 3)
+sample(1:10, 3)
+```
+
+Con semilla:
+
+```{r}
+set.seed(123)
+sample(1:10, 3)
+
+set.seed(123)
+sample(1:10, 3)
+```
+
+---
+
+# 5. Comparación Visual
+
+```{r}
+par(mfrow=c(1,2))
+
+barplot(table(train_simple$Species),
+        main="Simple",
+        col="steelblue")
+
+barplot(table(train_strat$Species),
+        main="Estratificado",
+        col="darkgreen")
+```
+
+---
+
+# 6. Conclusiones
+
+- El muestreo aleatorio simple no garantiza proporciones balanceadas.
+- El muestreo estratificado mantiene la distribución original.
+- `set.seed()` es fundamental para reproducibilidad.
+- En clasificación, el muestreo estratificado es generalmente preferible.

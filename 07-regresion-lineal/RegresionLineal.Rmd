@@ -1,0 +1,535 @@
+---
+title: "\U0001F3CE️ Cars"
+author: "Erick Marroquín"
+date: "2026-03-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(corrplot)
+library(caret)
+library(lmtest)
+```
+
+## 1. Descripción del Dataset
+
+Utilizaremos el dataset **mtcars**, incluido en R.
+
+Este conjunto contiene información técnica de 32 automóviles, incluyendo variables relacionadas con desempeño del motor y eficiencia.
+
+Variable de interés:
+
+* **mpg**: millas por galón (consumo de combustible) → variable continua.
+
+Algunas variables relevantes:
+
+* wt: peso del vehículo (en miles de libras)
+* hp: caballos de fuerza
+* disp: desplazamiento del motor
+* cyl: número de cilindros
+
+Pregunta de investigación:
+
+> ¿Qué variables explican el consumo de combustible (mpg)?
+
+## 2. Repaso de Regresión Lineal
+
+La regresión lineal modela la relación entre una variable dependiente continua (Y) y una o más variables independientes (X).
+
+Modelo simple:
+
+$$Y = \beta_0 + \beta_1 X + \varepsilon$$
+
+Modelo múltiple:
+
+$$Y = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + ... + \beta_k X_k + \varepsilon$$
+
+Supuestos principales:
+
+1. Linealidad
+2. Independencia de errores
+3. Homocedasticidad
+4. Normalidad de residuos
+
+## 3. Análisis Exploratorio
+
+```{r}
+data(mtcars)
+df <- mtcars
+
+str(df)
+summary(df)
+```
+
+### Matriz de correlación
+
+La matriz de correlación nos permite medir la relación lineal entre todas las variables numéricas del dataset.
+
+```{r}
+cor_matrix <- cor(df)
+cor_matrix
+```
+
+Ahora la visualizamos gráficamente para interpretar mejor la magnitud y dirección de las relaciones:
+
+```{r}
+corrplot(cor_matrix, method = "color", type = "upper",
+         addCoef.col = "black", tl.col = "black", tl.srt = 45)
+```
+
+Interpretación:
+
+* Valores cercanos a 1 → relación positiva fuerte.
+* Valores cercanos a -1 → relación negativa fuerte.
+* Valores cercanos a 0 → poca o ninguna relación lineal.
+
+Aquí podemos observar que wt y hp tienen correlación negativa considerable con mpg, lo que justifica explorarlas como variables predictoras.
+
+### Scatterplots principales
+
+Los scatterplots nos permiten evaluar visualmente si existe una relación lineal entre la variable respuesta (**mpg**) y posibles variables predictoras.
+
+En esta etapa buscamos:
+
+* Tendencia lineal (creciente o decreciente).
+* Presencia de curvatura (posible no linealidad).
+* Valores atípicos.
+* Dispersión constante (primer indicio de homocedasticidad).
+
+
+#### mpg vs wt (peso)
+
+```{r}
+plot(df$wt, df$mpg,
+     main="mpg vs wt",
+     xlab="Peso (wt)",
+     ylab="Millas por galón (mpg)",
+     pch=19)
+abline(lm(mpg ~ wt, data=df), col="red", lwd=2)
+```
+
+Interpretación esperada:
+
+* Relación negativa fuerte.
+* A mayor peso, menor eficiencia de combustible.
+* Patrón aproximadamente lineal.
+
+#### mpg vs hp (caballos de fuerza)
+
+```{r}
+plot(df$hp, df$mpg,
+     main="mpg vs hp",
+     xlab="Caballos de fuerza (hp)",
+     ylab="Millas por galón (mpg)",
+     pch=19)
+abline(lm(mpg ~ hp, data=df), col="blue", lwd=2)
+```
+
+Interpretación esperada:
+
+* Relación negativa moderada a fuerte.
+* Vehículos con mayor potencia tienden a consumir más combustible.
+* Posible ligera dispersión creciente.
+
+#### mpg vs disp (desplazamiento del motor)
+
+```{r}
+plot(df$disp, df$mpg,
+     main="mpg vs disp",
+     xlab="Desplazamiento (disp)",
+     ylab="Millas por galón (mpg)",
+     pch=19)
+abline(lm(mpg ~ disp, data=df), col="darkgreen", lwd=2)
+```
+
+Interpretación esperada:
+
+* Relación negativa clara.
+* Motores más grandes tienden a tener menor rendimiento.
+
+
+#### mpg vs cyl (número de cilindros)
+
+Aunque es una variable discreta, podemos visualizarla:
+
+```{r}
+plot(df$cyl, df$mpg,
+     main="mpg vs cyl",
+     xlab="Número de cilindros",
+     ylab="Millas por galón (mpg)",
+     pch=19)
+abline(lm(mpg ~ cyl, data=df), col="purple", lwd=2)
+```
+
+Interpretación:
+
+* Más cilindros → menor mpg.
+* Relación escalonada, pero con tendencia lineal negativa.
+
+Conclusión:
+
+Las variables **wt**, **hp** y **disp** muestran patrones lineales negativos claros con **mpg**, lo que justifica su evaluación formal mediante regresión lineal.
+
+Este análisis visual es un paso esencial antes de construir cualquier modelo.
+
+## 4. Selección de Variables
+
+Para realizar un análisis más completo, seleccionaremos tres pares de variables con comportamientos distintos. El objetivo es comparar:
+
+* Un modelo que funciona bien.
+* Un modelo que funciona de manera intermedia.
+* Un modelo que presenta debilidades claras.
+
+Esto nos permitirá evaluar cómo cambian los supuestos y el desempeño del modelo según la relación entre variables.
+
+### Par 1 — Relación fuerte esperada
+
+**mpg ~ wt**
+
+Justificación:
+
+* `wt` presenta una correlación negativa alta con `mpg`.
+* El scatterplot muestra una tendencia lineal clara.
+* Teóricamente tiene sentido: vehículos más pesados consumen más combustible.
+
+Esperamos:
+
+* Alto R².
+* Supuestos razonablemente bien cumplidos.
+* Modelo estable.
+
+### Par 2 — Relación moderada
+
+**mpg ~ hp**
+
+Justificación:
+
+* `hp` también tiene correlación negativa con `mpg`, pero menor que `wt`.
+* La dispersión es mayor.
+* Puede existir mayor variabilidad no explicada.
+
+Esperamos:
+
+* R² intermedio.
+* Mayor dispersión en residuos.
+* Posible indicio leve de heterocedasticidad.
+
+### Par 3 — Relación débil o menos adecuada
+
+**mpg ~ qsec**
+(`qsec` = tiempo en cuarto de milla)
+
+Justificación:
+
+* La relación con `mpg` es más débil.
+* El patrón visual no es tan claramente lineal.
+* Puede existir mayor ruido y menor capacidad explicativa.
+
+Esperamos:
+
+* Bajo R².
+* Mayor incumplimiento de supuestos.
+* Residuos con mayor dispersión y posible falta de linealidad.
+
+
+## 5. Train/Test
+
+Antes de evaluar supuestos y validar modelos, es fundamental separar los datos en entrenamiento y prueba.
+
+¿Por qué es importante?
+
+* Evita evaluar el modelo con los mismos datos usados para ajustarlo.
+* Permite medir capacidad predictiva real.
+* Reduce riesgo de sobreajuste.
+
+```{r}
+set.seed(314159)
+
+trainIndex <- createDataPartition(df$mpg, p = 0.7, list = FALSE)
+train <- df[trainIndex, ]
+test  <- df[-trainIndex, ]
+```
+
+A partir de ahora, los modelos se ajustarán con `train`.
+
+
+## 6. Pruebas de Supuestos
+
+Ajustamos los tres modelos en datos de entrenamiento:
+
+```{r}
+model_wt   <- lm(mpg ~ wt, data=train)
+model_hp   <- lm(mpg ~ hp, data=train)
+model_qsec <- lm(mpg ~ qsec, data=train)
+```
+
+### 6.1 Linealidad
+
+Supuesto: la relación entre X y Y debe ser lineal.
+
+Si la relación real no es lineal, el modelo estará mal especificado y los coeficientes serán sesgados.
+
+```{r}
+par(mfrow=c(1,3))
+plot(model_wt$fitted.values, resid(model_wt), main="Residuos (wt)")
+abline(h=0,col="red")
+
+plot(model_hp$fitted.values, resid(model_hp), main="Residuos (hp)")
+abline(h=0,col="red")
+
+plot(model_qsec$fitted.values, resid(model_qsec), main="Residuos (qsec)")
+abline(h=0,col="red")
+par(mfrow=c(1,1))
+```
+
+Buscamos ausencia de patrones o curvaturas. No hay una prueba estándar para validar linealidad.
+
+### 6.2 Normalidad de Residuos
+
+Supuesto: los errores deben distribuirse normalmente.
+
+La normalidad permite realizar inferencia estadística válida (intervalos y pruebas t).
+
+```{r}
+shapiro.test(resid(model_wt))
+shapiro.test(resid(model_hp))
+shapiro.test(resid(model_qsec))
+```
+Hipótesis:
+
+* H₀: Los residuos siguen una distribución normal.
+* H₁: Los residuos no siguen una distribución normal.
+
+Regla de decisión:
+
+* Si p-value > 0.05 → No se rechaza H₀ (normalidad plausible).
+* Si p-value ≤ 0.05 → Se rechaza H₀ (evidencia de no normalidad).
+
+### 6.3 Homocedasticidad
+
+Supuesto: la varianza de los errores debe ser constante.
+
+Si existe heterocedasticidad, los errores estándar serán incorrectos y la inferencia será poco confiable. Prueba Breusch-Pagan.
+
+```{r}
+bptest(model_wt)
+bptest(model_hp)
+bptest(model_qsec)
+```
+
+Hipótesis:
+
+* H₀: La varianza de los errores es constante (homocedasticidad).
+* H₁: La varianza de los errores no es constante (heterocedasticidad).
+
+Regla de decisión:
+
+* Si p-value > 0.05 → No se rechaza H₀ (varianza constante).
+* Si p-value ≤ 0.05 → Se rechaza H₀ (existe heterocedasticidad).
+
+### 6.4 Independencia
+
+Supuesto: los errores deben ser independientes.
+
+La autocorrelación genera estimaciones ineficientes. Prueba Durbin-Watson
+
+```{r}
+dwtest(model_wt)
+dwtest(model_hp)
+dwtest(model_qsec)
+```
+Hipótesis:
+
+* H₀: No existe autocorrelación de primer orden en los residuos.
+* H₁: Existe autocorrelación de primer orden en los residuos.
+
+Regla de decisión:
+
+* Si p-value > 0.05 → No se rechaza H₀ (independencia plausible).
+* Si p-value ≤ 0.05 → Se rechaza H₀ (evidencia de autocorrelación).
+
+## 7. Construcción del Modelo
+
+Comparamos desempeño en entrenamiento:
+
+```{r}
+summary(model_wt)
+summary(model_hp)
+summary(model_qsec)
+```
+
+### Información importante
+
+Al revisar `summary()` debemos enfocarnos en los siguientes elementos clave:
+
+#### Coeficientes (Estimate)
+
+Nos indican:
+
+* La **dirección del efecto** (signo positivo o negativo).
+* La **magnitud del impacto** sobre `mpg`.
+
+Ejemplo de interpretación:
+
+Si el coeficiente de `wt` es -4.61, significa que:
+
+Por cada aumento de 1 unidad en peso (1000 libras), el mpg disminuye en promedio 4.61 unidades.
+
+Aquí buscamos:
+
+* Coherencia con la teoría.
+* Magnitudes razonables.
+
+#### Significancia estadística (Pr(>|t|))
+
+Cada coeficiente prueba:
+
+* H₀: β = 0 (la variable no aporta información)
+* H₁: β ≠ 0
+
+Si p-value < 0.05 → la variable es estadísticamente significativa.
+
+Nos interesa identificar:
+
+* Qué variables realmente aportan explicación.
+* Cuáles podrían eliminarse del modelo.
+
+#### R² y R² Ajustado
+
+* **R²:** proporción de variabilidad explicada por el modelo.
+* **R² ajustado:** corrige por número de variables.
+
+Buscamos:
+
+* Modelos con mayor R².
+* Que el R² ajustado no disminuya al agregar variables.
+
+Si agregamos una variable y el R² ajustado baja, esa variable no está aportando suficiente información.
+
+#### Residual Standard Error (RSE)
+
+Mide el error promedio de predicción en las mismas unidades de `mpg`.
+
+Más pequeño → mejor capacidad predictiva en entrenamiento.
+
+#### Comparación entre modelos simples
+
+Aquí evaluamos:
+
+* ¿Cuál variable explica más variabilidad?
+* ¿Cuál tiene mayor R²?
+* ¿Cuál presenta coeficientes más significativos?
+
+Esto nos permite decidir qué variables son candidatas para el modelo múltiple.
+
+Luego construimos un modelo múltiple con las variables más prometedoras:
+
+```{r}
+model_multiple <- lm(mpg ~ wt + hp, data=train)
+summary(model_multiple)
+```
+El modelo estimado es de la forma:
+
+mpg = β₀ + β₁·wt + β₂·hp + ε
+
+Ahora debemos analizar:
+
+*Si ambos coeficientes siguen siendo significativos.
+*Si el R² ajustado mejora respecto a los modelos simples.
+*Si alguno pierde significancia (posible multicolinealidad).
+*Si el error estándar residual disminuye.
+
+## 8. Validación del Modelo
+
+Evaluamos los modelos utilizando el conjunto de prueba (datos no vistos).
+
+```{r}
+pred_wt   <- predict(model_wt, test)
+pred_hp   <- predict(model_hp, test)
+pred_qsec <- predict(model_qsec, test)
+pred_mult <- predict(model_multiple, test)
+```
+
+
+### Métricas de Evaluación
+
+Calculamos RMSE y R² para cada modelo en test.
+
+```{r}
+R2_test <- function(actual, predicted) {
+  1 - sum((actual - predicted)^2) / sum((actual - mean(actual))^2)
+}
+
+results <- data.frame(
+  Modelo = c("mpg ~ wt", "mpg ~ hp", "mpg ~ qsec", "mpg ~ wt + hp"),
+  RMSE = c(
+    RMSE(pred_wt, test$mpg),
+    RMSE(pred_hp, test$mpg),
+    RMSE(pred_qsec, test$mpg),
+    RMSE(pred_mult, test$mpg)
+  ),
+  R2 = c(
+    R2_test(test$mpg, pred_wt),
+    R2_test(test$mpg, pred_hp),
+    R2_test(test$mpg, pred_qsec),
+    R2_test(test$mpg, pred_mult)
+  )
+)
+
+results
+```
+
+Interpretación:
+
+* **RMSE más bajo** → mejor capacidad predictiva.
+* **R² más alto** → mayor proporción de variabilidad explicada en datos nuevos.
+
+### Comparación Visual de Modelos
+
+#### Comparación por RMSE
+
+```{r}
+barplot(results$RMSE,
+        names.arg = results$Modelo,
+        main = "Comparación de RMSE en Test",
+        ylab = "RMSE",
+        las = 2)
+```
+
+#### Comparación por R²
+
+```{r}
+barplot(results$R2,
+        names.arg = results$Modelo,
+        main = "Comparación de R² en Test",
+        ylab = "R²",
+        las = 2)
+```
+
+El mejor modelo será aquel que combine:
+
+* Menor RMSE.
+* Mayor R².
+* Coherencia estadística en los supuestos.
+
+La validación en test permite identificar qué modelo realmente generaliza mejor y evita tomar decisiones basadas únicamente en desempeño de entrenamiento.
+
+## 9. Guardar Predicciones en el Dataset (extra)
+
+Agregamos una nueva columna al conjunto de prueba:
+
+```{r}
+test$mpg_predicho <- pred_mult
+head(test[, c("mpg", "mpg_predicho")])
+```
+
+Ahora el dataset de prueba contiene:
+
+* Valor real (`mpg`)
+* Valor predicho (`mpg_predicho`)
+
+Esto permite comparar directamente errores individuales y analizar desempeño a nivel observación.
