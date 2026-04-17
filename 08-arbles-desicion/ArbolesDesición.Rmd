@@ -1,0 +1,880 @@
+---
+title: "Arboles de Desición"
+author: "Erick Marroquín"
+date: "2026-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# Introducción
+
+Este documento analiza el famoso dataset del Titanic para construir un
+modelo de árbol de decisión que prediga si un pasajero sobrevivió o no
+al hundimiento del barco el 15 de abril de 1912.
+
+El objetivo pedagógico es recorrer el flujo completo de un análisis de
+aprendizaje supervisado:
+
+1. Descripción del problema y las variables.
+2. Análisis exploratorio de datos (EDA).
+3. Preprocesamiento.
+4. Ingeniería de variables (Feature Engineering).
+5. Entrenamiento de un modelo base.
+6. Evaluación del modelo.
+7. Ajuste de hiperparámetros (tuning) con validación cruzada.
+8. Random Forest.
+9. Comparación de resultados.
+
+---
+
+# Paquetes necesarios
+
+```{r paquetes, message=FALSE, warning=FALSE}
+# Instalación (solo la primera vez — descomentá si es necesario):
+# install.packages(c("tidyverse", "rpart", "rpart.plot", "caret", "Hmisc", "ranger"))
+
+# tidyverse: colección de paquetes para manipulación y visualización de datos.
+library(tidyverse)
+
+# rpart: implementación de árboles de decisión (Recursive PARTitioning).
+library(rpart)
+
+# rpart.plot: visualización mejorada de árboles rpart.
+library(rpart.plot)
+
+# caret: framework para entrenamiento, tuning y validación de modelos.
+library(caret)
+
+# Hmisc: herramientas útiles para describir y explorar datos.
+library(Hmisc)
+
+# ranger: implementación rápida de Random Forest con más hiperparámetros.
+library(ranger)
+```
+
+---
+
+# Carga de datos
+
+```{r carga}
+# Leer el archivo CSV descargado desde Kaggle.
+# Asegurate de que el archivo "Titanic-Dataset.csv" esté en el mismo
+# directorio que este .Rmd, o ajusta la ruta según corresponda.
+titanic <- read.csv("Titanic-Dataset.csv", stringsAsFactors = FALSE)
+
+# Verificar las dimensiones: filas (pasajeros) y columnas (variables).
+cat("Filas:", nrow(titanic), "\n")
+cat("Columnas:", ncol(titanic), "\n")
+
+# Ver las primeras 6 filas para tener una primera impresión del dataset.
+head(titanic)
+```
+
+---
+
+# Descripción de variables
+
+El dataset contiene información sobre 891 pasajeros del Titanic.
+A continuación se describe cada variable:
+
+```{r descripcion-tabla, echo=FALSE}
+descripcion <- data.frame(
+  Variable   = c("PassengerId", "Survived", "Pclass", "Name", "Sex",
+                 "Age", "SibSp", "Parch", "Ticket", "Fare",
+                 "Cabin", "Embarked"),
+  Tipo       = c("Entero", "Entero (0/1)", "Entero (1/2/3)",
+                 "Texto", "Texto", "Numérico", "Entero", "Entero",
+                 "Texto", "Numérico", "Texto", "Texto"),
+  Descripcion = c(
+    "Identificador único del pasajero",
+    "Variable objetivo: 1 = Sobrevivió, 0 = No sobrevivió",
+    "Clase del ticket: 1ª (alta), 2ª (media), 3ª (baja)",
+    "Nombre completo del pasajero",
+    "Sexo: male / female",
+    "Edad en años",
+    "Número de hermanos/cónyuge a bordo",
+    "Número de padres/hijos a bordo",
+    "Número de ticket",
+    "Tarifa pagada (en libras esterlinas)",
+    "Número de camarote",
+    "Puerto de embarque: C=Cherburgo, Q=Queenstown, S=Southampton"
+  )
+)
+
+knitr::kable(descripcion, caption = "Descripción de variables del dataset Titanic")
+```
+
+> **Variable objetivo:** `Survived` — lo que el modelo debe aprender a predecir.
+
+---
+
+# Análisis Exploratorio de Datos (EDA)
+
+## Resumen estadístico
+
+```{r resumen}
+# summary() muestra estadísticas básicas para cada variable:
+# mínimo, máximo, media, mediana, y conteo de valores NA.
+summary(titanic)
+```
+
+## Valores faltantes
+
+```{r valores-faltantes}
+# Contar cuántos NA tiene cada columna.
+na_por_columna <- colSums(is.na(titanic))
+
+# Mostrar solo las columnas que tienen al menos 1 NA.
+na_por_columna[na_por_columna > 0]
+```
+
+```{r barras-na}
+na_df <- data.frame(
+  variable  = names(na_por_columna),
+  faltantes = as.integer(na_por_columna)
+) %>%
+  filter(faltantes > 0)
+
+ggplot(na_df, aes(x = reorder(variable, -faltantes), y = faltantes)) +
+  geom_col(fill = "#e74c3c") +
+  geom_text(aes(label = faltantes), vjust = -0.4, size = 4) +
+  labs(
+    title = "Valores faltantes por variable",
+    x = "Variable",
+    y = "Cantidad de NAs"
+  ) +
+  theme_minimal()
+```
+
+## Distribución de la variable objetivo
+
+```{r distribucion-survived}
+titanic %>%
+  mutate(Survived = factor(Survived, labels = c("No sobrevivió", "Sobrevivió"))) %>%
+  ggplot(aes(x = Survived, fill = Survived)) +
+  geom_bar() +
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.4, size = 5) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Distribución de supervivencia",
+    x = NULL,
+    y = "Número de pasajeros"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+> El dataset está desbalanceado: murieron más pasajeros de los que sobrevivieron.
+> Esto es importante al interpretar la precisión del modelo.
+
+## Supervivencia por sexo
+
+```{r supervivencia-sexo}
+titanic %>%
+  mutate(Survived = factor(Survived, labels = c("No", "Sí"))) %>%
+  ggplot(aes(x = Sex, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Tasa de supervivencia por sexo",
+    x = "Sexo",
+    y = "Proporción",
+    fill = "Sobrevivió"
+  ) +
+  theme_minimal()
+```
+
+## Supervivencia por clase de ticket
+
+```{r supervivencia-clase}
+titanic %>%
+  mutate(
+    Survived = factor(Survived, labels = c("No", "Sí")),
+    Pclass   = factor(Pclass, labels = c("1ª Clase", "2ª Clase", "3ª Clase"))
+  ) %>%
+  ggplot(aes(x = Pclass, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Tasa de supervivencia por clase de ticket",
+    x = "Clase",
+    y = "Proporción",
+    fill = "Sobrevivió"
+  ) +
+  theme_minimal()
+```
+
+## Distribución de edad
+
+```{r distribucion-edad}
+titanic %>%
+  filter(!is.na(Age)) %>%
+  mutate(Survived = factor(Survived, labels = c("No sobrevivió", "Sobrevivió"))) %>%
+  ggplot(aes(x = Age, fill = Survived)) +
+  geom_histogram(binwidth = 5, alpha = 0.7, position = "identity") +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Distribución de edad por supervivencia",
+    x = "Edad",
+    y = "Frecuencia",
+    fill = NULL
+  ) +
+  theme_minimal()
+```
+
+## Tarifa pagada por clase
+
+```{r tarifa-clase}
+titanic %>%
+  mutate(Pclass = factor(Pclass, labels = c("1ª Clase", "2ª Clase", "3ª Clase"))) %>%
+  ggplot(aes(x = Pclass, y = Fare, fill = Pclass)) +
+  geom_boxplot(outlier.colour = "#e74c3c", outlier.size = 2) +
+  scale_fill_brewer(palette = "Blues") +
+  labs(
+    title = "Distribución de tarifa por clase",
+    x = "Clase",
+    y = "Tarifa (libras esterlinas)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+---
+
+# Preprocesamiento
+
+## Selección de variables
+
+```{r seleccion}
+# Conservamos Name porque extraeremos el título.
+# Conservamos Age porque crearemos una variable categórica a partir de ella.
+titanic_clean <- titanic %>%
+  select(Survived, Pclass, Sex, Age, SibSp, Parch, Fare, Embarked, Name)
+
+cat("Variables seleccionadas:", ncol(titanic_clean), "\n")
+```
+
+## Imputación de valores faltantes
+
+```{r imputacion}
+# Age: imputar los NA con la mediana.
+mediana_edad <- median(titanic_clean$Age, na.rm = TRUE)
+titanic_clean$Age[is.na(titanic_clean$Age)] <- mediana_edad
+
+cat("Mediana de edad usada para imputación:", mediana_edad, "\n")
+
+# Embarked: imputar con la moda.
+moda_embarked <- names(sort(table(titanic_clean$Embarked), decreasing = TRUE))[1]
+titanic_clean$Embarked[titanic_clean$Embarked == ""] <- moda_embarked
+
+cat("Moda de Embarked usada para imputación:", moda_embarked, "\n")
+cat("NAs restantes:", sum(is.na(titanic_clean)), "\n")
+```
+
+---
+
+# Ingeniería de Variables (Feature Engineering)
+
+El preprocesamiento limpia los datos tal como están. La ingeniería de
+variables va un paso más allá: **crea nuevas variables** que el modelo
+no podría descubrir por sí solo a partir de los datos en bruto.
+
+## Extracción del título
+
+Los nombres tienen el formato `Apellido, Título. Nombre`. El título
+(`Mr.`, `Mrs.`, `Miss.`, `Master.`) concentra en una sola palabra
+información sobre sexo, edad aproximada y clase social.
+
+```{r extraer-titulo}
+titanic_clean <- titanic_clean %>%
+  mutate(
+    Title = str_extract(Name, ",\\s([A-Za-z]+)\\."),
+    Title = str_remove_all(Title, ",\\s|\\."),
+    Title = str_trim(Title)
+  )
+
+table(titanic_clean$Title)
+```
+
+```{r consolidar-titulos}
+# Títulos raros se consolidan en "Rare" para evitar ruido.
+titanic_clean <- titanic_clean %>%
+  mutate(
+    Title = case_when(
+      Title %in% c("Mr")                                           ~ "Mr",
+      Title %in% c("Miss", "Mlle", "Ms")                          ~ "Miss",
+      Title %in% c("Mrs", "Mme")                                  ~ "Mrs",
+      Title %in% c("Master")                                      ~ "Master",
+      Title %in% c("Dr", "Rev", "Col", "Major", "Capt",
+                   "Sir", "Jonkheer", "Don", "Lady", "Countess")  ~ "Rare",
+      TRUE                                                         ~ "Other"
+    )
+  )
+
+cat("Títulos finales:\n")
+table(titanic_clean$Title)
+```
+
+```{r supervivencia-titulo}
+titanic_clean %>%
+  mutate(Survived = factor(Survived, labels = c("No", "Sí"))) %>%
+  ggplot(aes(x = Title, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Tasa de supervivencia por título",
+    x = "Título",
+    y = "Proporción",
+    fill = "Sobrevivió"
+  ) +
+  theme_minimal()
+```
+
+## Categorización de edad (AgeBin)
+
+La edad continua, especialmente después de imputación por mediana, pierde
+información importante. Los niños menores de 12 años tuvieron prioridad
+en los botes salvavidas — ese patrón se diluye con un valor numérico.
+Convertir la edad a categorías preserva esa señal de forma explícita.
+
+```{r age-bin}
+# Dividir la edad en 5 categorías con significado real en el contexto del Titanic.
+titanic_clean <- titanic_clean %>%
+  mutate(
+    AgeBin = case_when(
+      Age < 12              ~ "Niño",
+      Age >= 12 & Age < 18  ~ "Adolescente",
+      Age >= 18 & Age < 35  ~ "Adulto joven",
+      Age >= 35 & Age < 60  ~ "Adulto",
+      Age >= 60             ~ "Mayor"
+    ),
+    AgeBin = factor(AgeBin,
+                    levels = c("Niño", "Adolescente",
+                               "Adulto joven", "Adulto", "Mayor"))
+  )
+
+cat("Distribución de AgeBin:\n")
+table(titanic_clean$AgeBin)
+```
+
+```{r supervivencia-agebin}
+titanic_clean %>%
+  mutate(Survived = factor(Survived, labels = c("No", "Sí"))) %>%
+  ggplot(aes(x = AgeBin, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Tasa de supervivencia por grupo de edad",
+    x = "Grupo de edad",
+    y = "Proporción",
+    fill = "Sobrevivió"
+  ) +
+  theme_minimal()
+```
+
+## Tamaño de familia e indicador de viaje solo
+
+```{r familia}
+titanic_clean <- titanic_clean %>%
+  mutate(
+    FamilySize = SibSp + Parch + 1,
+    IsAlone    = if_else(FamilySize == 1, 1, 0)
+  )
+
+cat("Distribución de tamaño de familia:\n")
+table(titanic_clean$FamilySize)
+```
+
+```{r supervivencia-familia}
+titanic_clean %>%
+  mutate(Survived = factor(Survived, labels = c("No", "Sí"))) %>%
+  ggplot(aes(x = factor(FamilySize), fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("#e74c3c", "#2ecc71")) +
+  labs(
+    title = "Tasa de supervivencia por tamaño de familia",
+    x = "Tamaño de familia (incluyendo al pasajero)",
+    y = "Proporción",
+    fill = "Sobrevivió"
+  ) +
+  theme_minimal()
+```
+
+## Dataset final para modelado
+
+```{r dataset-final}
+# Descartamos: Name (título ya extraído), SibSp y Parch (absorbidos en FamilySize),
+# Age continua (reemplazada por AgeBin), Fare (redundante con Pclass).
+titanic_model <- titanic_clean %>%
+  select(Survived, Pclass, Sex, AgeBin, Embarked,
+         Title, FamilySize, IsAlone)
+
+cat("Variables finales para el modelo:\n")
+str(titanic_model)
+```
+
+## Conversión de tipos
+
+```{r conversion-tipos}
+titanic_model <- titanic_model %>%
+  mutate(
+    Survived   = factor(Survived, levels = c(0, 1),
+                        labels = c("No_Sobrevivio", "Sobrevivio")),
+    Pclass     = factor(Pclass),
+    Sex        = factor(Sex),
+    Embarked   = factor(Embarked),
+    Title      = factor(Title),
+    IsAlone    = factor(IsAlone, labels = c("No", "Sí"))
+  )
+
+str(titanic_model)
+```
+
+## División en entrenamiento y prueba
+
+```{r division-datos}
+set.seed(42)
+
+indices_train <- createDataPartition(
+  y    = titanic_model$Survived,
+  p    = 0.75,
+  list = FALSE
+)
+
+train_data <- titanic_model[ indices_train, ]
+test_data  <- titanic_model[-indices_train, ]
+
+cat("Tamaño del conjunto de entrenamiento:", nrow(train_data), "\n")
+cat("Tamaño del conjunto de prueba:       ", nrow(test_data), "\n")
+```
+
+---
+
+# Matriz de Confusión y Tipos de Error
+
+Antes de entrenar modelos necesitamos entender **cómo se mide** su
+desempeño. La herramienta central es la **matriz de confusión**.
+
+## ¿Qué es?
+
+Es una tabla que cruza las predicciones del modelo con los valores
+reales. Para un problema binario (Sobrevivió / No Sobrevivió) tiene
+cuatro celdas:
+
+```{r matriz-concepto, echo=FALSE}
+concepto <- data.frame(
+  ` `                  = c("Predijo: Sobrevivió", "Predijo: No Sobrevivió"),
+  `Real: Sobrevivió`   = c("Verdadero Positivo (VP)", "Falso Negativo (FN)"),
+  `Real: No Sobrevivió`= c("Falso Positivo (FP)", "Verdadero Negativo (VN)"),
+  check.names = FALSE
+)
+
+knitr::kable(concepto, caption = "Estructura de la matriz de confusión")
+```
+
+## Los cuatro resultados posibles
+
+- **Verdadero Positivo (VP):** el modelo predijo "Sobrevivió" y era correcto.
+- **Verdadero Negativo (VN):** el modelo predijo "No Sobrevivió" y era correcto.
+- **Falso Positivo (FP) — Error Tipo I:** el modelo predijo "Sobrevivió" pero el pasajero no sobrevivió. El modelo fue demasiado optimista.
+- **Falso Negativo (FN) — Error Tipo II:** el modelo predijo "No Sobrevivió" pero el pasajero sí sobrevivió. El modelo no detectó un sobreviviente.
+
+## Métricas derivadas
+
+A partir de esos cuatro valores se calculan todas las métricas que
+usamos para evaluar el modelo:
+
+```{r metricas-concepto, echo=FALSE}
+metricas <- data.frame(
+  Métrica        = c("Exactitud (Accuracy)",
+                     "Sensibilidad (Recall / TPR)",
+                     "Especificidad (TNR)",
+                     "Kappa de Cohen"),
+  Fórmula        = c("(VP + VN) / Total",
+                     "VP / (VP + FN)",
+                     "VN / (VN + FP)",
+                     "Acuerdo observado vs. esperado por azar"),
+  Interpretación = c(
+    "% de predicciones correctas en total",
+    "% de sobrevivientes reales que el modelo detectó",
+    "% de no-sobrevivientes reales que el modelo identificó",
+    "Qué tan mejor es el modelo vs. adivinar al azar (0–1)"
+  )
+)
+
+knitr::kable(metricas, caption = "Métricas derivadas de la matriz de confusión")
+```
+
+## ¿Cuál error es más grave?
+
+Depende del problema. En este contexto:
+
+- Un **FP** significa decirle a alguien que sobrevivió cuando no lo hizo.
+- Un **FN** significa no detectar a un sobreviviente real.
+
+En aplicaciones médicas o de rescate, los **Falsos Negativos** suelen
+ser más costosos. Por eso no es suficiente mirar la exactitud — hay que
+analizar sensibilidad y especificidad por separado.
+
+## ¿Por qué no basta con la Exactitud?
+
+Con clases desbalanceadas (más muertes que supervivencias), un modelo
+que siempre predice "No Sobrevivió" tendría ~62% de exactitud
+**sin aprender nada**. Por eso usamos **ROC (AUC)** como métrica de
+optimización: mide qué tan bien el modelo separa las dos clases,
+independientemente de cuál es más frecuente.
+
+---
+
+# Modelo Base (Sin Restricciones)
+
+## Entrenamiento
+
+```{r modelo-base}
+# cp = 0, minsplit = 2, minbucket = 1: el árbol crece sin ningún límite.
+modelo_base <- rpart(
+  formula = Survived ~ .,
+  data    = train_data,
+  method  = "class",
+  control = rpart.control(cp = 0, minsplit = 2, minbucket = 1)
+)
+
+printcp(modelo_base)
+```
+
+## Visualización del árbol base
+
+```{r plot-base, fig.width=14, fig.height=8}
+rpart.plot(
+  modelo_base,
+  type          = 2,
+  extra         = 104,
+  fallen.leaves = TRUE,
+  main          = "Árbol de Decisión — Sin Restricciones"
+)
+```
+
+> Observá la profundidad y cantidad de nodos. Este árbol probablemente está
+> memorizando los datos de entrenamiento.
+
+## Evaluación del modelo base
+
+```{r evaluacion-base}
+pred_base <- predict(modelo_base, newdata = test_data, type = "class")
+
+cm_base <- confusionMatrix(
+  data      = pred_base,
+  reference = test_data$Survived,
+  positive  = "Sobrevivio"
+)
+
+print(cm_base)
+```
+
+```{r accuracy-base}
+acc_base <- cm_base$overall["Accuracy"]
+cat("Exactitud del modelo base en prueba:", round(acc_base * 100, 2), "%\n")
+```
+
+---
+
+# Overfitting: Evidencia
+
+```{r overfitting-evidencia}
+# Predicción sobre los datos de ENTRENAMIENTO.
+pred_train_base <- predict(modelo_base, newdata = train_data, type = "class")
+acc_train_base  <- mean(pred_train_base == train_data$Survived)
+
+acc_test_base <- cm_base$overall["Accuracy"]
+
+cat("Exactitud en ENTRENAMIENTO:", round(acc_train_base * 100, 2), "%\n")
+cat("Exactitud en PRUEBA:       ", round(acc_test_base  * 100, 2), "%\n")
+cat("Diferencia:                ",
+    round((acc_train_base - acc_test_base) * 100, 2), "puntos porcentuales\n")
+```
+
+> Si la exactitud en entrenamiento es mucho mayor que en prueba,
+> el modelo memorizó en lugar de aprender patrones generales.
+
+---
+
+# Ajuste de Hiperparámetros — Árbol (Tuning)
+
+## ¿Qué es `cp` (Complexity Parameter)?
+
+`cp` penaliza la complejidad del árbol: si agregar una división no mejora
+el modelo al menos en `cp`, la división no se realiza.
+
+- `cp` alto → árbol pequeño (puede subajustar).
+- `cp` bajo → árbol grande (puede sobreajustar).
+
+## Configuración de la validación cruzada
+
+```{r config-cv}
+# repeatedcv: repetir la validación cruzada varias veces para estimaciones
+# más estables. number = 10 folds, repeats = 3 repeticiones.
+# summaryFunction = twoClassSummary habilita ROC como métrica.
+control_cv <- trainControl(
+  method          = "repeatedcv",
+  number          = 10,
+  repeats         = 3,
+  savePredictions = "final",
+  classProbs      = TRUE,
+  summaryFunction = twoClassSummary
+)
+```
+
+## Grilla de búsqueda
+
+```{r grilla-busqueda}
+grilla_cp <- expand.grid(
+  cp = c(0.001, 0.005, 0.01, 0.02, 0.05, 0.1)
+)
+
+print(grilla_cp)
+```
+
+## Entrenamiento con tuning
+
+```{r tuning, cache=TRUE}
+set.seed(42)
+
+modelo_tuned <- train(
+  Survived ~ .,
+  data      = train_data,
+  method    = "rpart",
+  metric    = "ROC",
+  trControl = control_cv,
+  tuneGrid  = grilla_cp
+)
+
+print(modelo_tuned)
+```
+
+## Visualización del tuning
+
+```{r plot-tuning}
+plot(
+  modelo_tuned,
+  main = "ROC promedio (CV 10-Fold x3) por valor de cp"
+)
+
+cat("Mejor valor de cp encontrado:", modelo_tuned$bestTune$cp, "\n")
+```
+
+## Árbol final
+
+```{r plot-tuned, fig.width=12, fig.height=7}
+rpart.plot(
+  modelo_tuned$finalModel,
+  type          = 2,
+  extra         = 104,
+  fallen.leaves = TRUE,
+  main          = paste("Árbol — cp =", modelo_tuned$bestTune$cp)
+)
+```
+
+## Evaluación
+
+```{r evaluacion-tuned}
+pred_tuned <- predict(modelo_tuned, newdata = test_data, type = "raw")
+
+cm_tuned <- confusionMatrix(
+  data      = pred_tuned,
+  reference = test_data$Survived,
+  positive  = "Sobrevivio"
+)
+
+print(cm_tuned)
+```
+
+---
+
+# Random Forest
+
+Un árbol de decisión individual tiene un problema estructural: es muy
+sensible a los datos de entrenamiento. Pequeños cambios en los datos
+pueden producir un árbol completamente distinto.
+
+**Random Forest** resuelve esto construyendo **muchos árboles en paralelo**
+y combinando sus predicciones por votación mayoritaria. Cada árbol se
+entrena con una muestra aleatoria de los datos y una selección aleatoria
+de variables — de ahí el nombre "bosque aleatorio".
+
+## ¿Por qué mejora al árbol individual?
+
+- **Varianza reducida:** el promedio de muchos árboles es más estable que uno solo.
+- **Menos overfitting:** la aleatoriedad evita que todos los árboles memoricen los mismos patrones.
+- **Mejor generalización:** combina la "sabiduría" de múltiples perspectivas del problema.
+
+## Hiperparámetros de `ranger`
+
+Usamos `ranger`, una implementación de Random Forest con más control
+sobre el proceso de entrenamiento:
+
+```{r ranger-params, echo=FALSE}
+params_rf <- data.frame(
+  Hiperparámetro = c("mtry", "min.node.size", "splitrule"),
+  Descripción    = c(
+    "Número de variables candidatas en cada división",
+    "Tamaño mínimo de un nodo hoja",
+    "Criterio de división: 'gini' o 'extratrees'"
+  ),
+  Efecto = c(
+    "Controla la diversidad entre árboles",
+    "Controla el tamaño del árbol (similar a min_samples_leaf)",
+    "extratrees añade aleatoriedad extra al punto de corte"
+  )
+)
+
+knitr::kable(params_rf, caption = "Hiperparámetros del Random Forest (ranger)")
+```
+
+## Grilla de búsqueda
+
+```{r grilla-rf}
+# Con 7 variables, mtry típico es sqrt(7) ≈ 2-3.
+# Explorar desde 2 hasta 6 para cubrir el espacio completo.
+grilla_rf <- expand.grid(
+  mtry          = c(2, 3, 4, 5, 6),
+  min.node.size = c(1, 5, 10),
+  splitrule     = c("gini", "extratrees")
+)
+
+cat("Combinaciones a evaluar:", nrow(grilla_rf), "\n")
+```
+
+## Entrenamiento con tuning
+
+```{r rf-tuning, cache=TRUE}
+set.seed(42)
+
+modelo_rf <- train(
+  Survived ~ .,
+  data      = train_data,
+  method    = "ranger",     # Random Forest con ranger
+  metric    = "ROC",
+  trControl = control_cv,   # Misma CV 10-Fold x3 definida anteriormente
+  tuneGrid  = grilla_rf,
+  num.trees = 500,          # 500 árboles en el bosque
+  importance = "impurity"
+)
+
+print(modelo_rf)
+```
+
+```{r rf-tuning-plot}
+plot(
+  modelo_rf,
+  main = "ROC promedio (CV 10-Fold x3) — Random Forest"
+)
+
+cat("Mejor configuración encontrada:\n")
+print(modelo_rf$bestTune)
+```
+
+## Importancia de variables
+
+A diferencia del árbol individual, Random Forest no se puede dibujar
+como un diagrama. En cambio, reporta la **importancia de cada variable**
+como el promedio de su aporte en todos los 500 árboles.
+
+```{r rf-importancia}
+importancia_rf <- varImp(modelo_rf)
+
+plot(
+  importancia_rf,
+  main = "Importancia de variables — Random Forest"
+)
+```
+
+## Evaluación
+
+```{r rf-eval}
+pred_rf <- predict(modelo_rf, newdata = test_data, type = "raw")
+
+cm_rf <- confusionMatrix(
+  data      = pred_rf,
+  reference = test_data$Survived,
+  positive  = "Sobrevivio"
+)
+
+print(cm_rf)
+```
+
+---
+
+# Comparación Final de Modelos
+
+```{r comparacion-final}
+comparacion_final <- data.frame(
+  Modelo = c(
+    "Árbol — Sin Restricciones",
+    "Árbol — Con Tuning",
+    "Random Forest — Con Tuning"
+  ),
+  Exactitud = c(
+    round(cm_base$overall["Accuracy"] * 100, 2),
+    round(cm_tuned$overall["Accuracy"] * 100, 2),
+    round(cm_rf$overall["Accuracy"] * 100, 2)
+  ),
+  Sensibilidad = c(
+    round(cm_base$byClass["Sensitivity"] * 100, 2),
+    round(cm_tuned$byClass["Sensitivity"] * 100, 2),
+    round(cm_rf$byClass["Sensitivity"] * 100, 2)
+  ),
+  Especificidad = c(
+    round(cm_base$byClass["Specificity"] * 100, 2),
+    round(cm_tuned$byClass["Specificity"] * 100, 2),
+    round(cm_rf$byClass["Specificity"] * 100, 2)
+  ),
+  Kappa = c(
+    round(cm_base$overall["Kappa"], 4),
+    round(cm_tuned$overall["Kappa"], 4),
+    round(cm_rf$overall["Kappa"], 4)
+  )
+)
+
+knitr::kable(
+  comparacion_final,
+  caption = "Comparación final de los tres modelos"
+)
+```
+
+> - **Exactitud:** % de predicciones correctas en total.
+> - **Sensibilidad:** % de sobrevivientes reales correctamente detectados.
+> - **Especificidad:** % de no-sobrevivientes reales correctamente identificados.
+> - **Kappa:** acuerdo entre predicción y realidad ajustado por azar (0 = azar, 1 = perfecto).
+
+---
+
+# Conclusiones
+
+1. **La ingeniería de variables fue el mayor aporte**: `Title` y `AgeBin`
+   capturaron señales que la edad continua y el nombre en bruto no podían
+   transmitir al modelo directamente.
+
+2. **La matriz de confusión reveló lo que la exactitud ocultaba**: un modelo
+   con alta exactitud puede tener sensibilidad baja — ese trade-off es
+   visible solo cuando se analizan VP, VN, FP y FN por separado.
+
+3. **El árbol sin restricciones mostró overfitting claro**: alta exactitud
+   en entrenamiento, pero caída visible en datos nuevos.
+
+4. **El tuning con `cp` y validación cruzada** mejoró la generalización del
+   árbol individual al encontrar el balance correcto de complejidad.
+
+5. **Random Forest con `ranger`** extendió la búsqueda a tres dimensiones
+   (`mtry`, `min.node.size`, `splitrule`), aprovechando la diversidad de
+   árboles para reducir la varianza y mejorar las métricas globales.
+
+6. **Optimizar con ROC en lugar de Accuracy** produjo modelos más honestos
+   ante el desbalance de clases del dataset.

@@ -63,6 +63,7 @@ df <- mtcars
 
 str(df)
 summary(df)
+head(df)
 ```
 
 ### Matriz de correlación

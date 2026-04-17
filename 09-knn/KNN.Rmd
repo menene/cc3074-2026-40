@@ -1,0 +1,382 @@
+---
+title: "KNN"
+author: "Erick Marroquín"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width = 8,
+  fig.height = 5
+)
+```
+
+---
+
+## Paquetes
+
+```{r paquetes}
+library(caret)      # KNN, preprocesamiento, evaluación
+library(ggplot2)    # Visualizaciones
+library(dplyr)      # Manipulación de datos
+library(tidyr)      # Transformación de datos
+```
+
+---
+
+## Datos
+
+Se utiliza el dataset **German Credit** (UCI Machine Learning Repository / Kaggle).
+
+Contiene información de **1,000 clientes** de un banco alemán.
+El objetivo es predecir si un cliente representa un **buen o mal riesgo crediticio**.
+
+```{r datos}
+data("GermanCredit", package = "caret")
+
+# Vista general
+glimpse(GermanCredit)
+```
+
+### Variables de interés
+
+Para mantener el ejemplo claro y visualizable, se trabaja con un subconjunto de variables:
+
+| Variable | Descripción |
+|----------|-------------|
+| `Age` | Edad del cliente (años) |
+| `Amount` | Monto de crédito solicitado (DM) |
+| `Duration` | Duración del crédito (meses) |
+| `Class` | Buen o mal pagador (`Good` / `Bad`) |
+
+```{r subconjunto}
+datos <- GermanCredit %>%
+  select(Age, Amount, Duration, Class) %>%
+  mutate(Class = factor(Class, levels = c("Good", "Bad")))
+
+# Distribución de clases
+table(datos$Class)
+```
+
+---
+
+## Exploración
+
+### Distribución por clase
+
+```{r exploracion-clase}
+datos %>%
+  count(Class) %>%
+  ggplot(aes(x = Class, y = n, fill = Class)) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = n), vjust = -0.5) +
+  scale_fill_manual(values = c("Good" = "#2196F3", "Bad" = "#F44336")) +
+  labs(title = "Distribución de clases", x = "Clase", y = "Cantidad") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+> El dataset está **desbalanceado**: hay más clientes buenos que malos.
+> Esto se toma en cuenta al interpretar las métricas.
+
+### Edad vs Monto por clase
+
+```{r exploracion-dispersion}
+ggplot(datos, aes(x = Age, y = Amount, color = Class)) +
+  geom_point(alpha = 0.5, size = 1.8) +
+  scale_color_manual(values = c("Good" = "#2196F3", "Bad" = "#F44336")) +
+  labs(
+    title = "Edad vs Monto del crédito",
+    x = "Edad (años)",
+    y = "Monto (DM)",
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+### Duración vs Monto por clase
+
+```{r exploracion-duracion}
+ggplot(datos, aes(x = Duration, y = Amount, color = Class)) +
+  geom_point(alpha = 0.5, size = 1.8) +
+  scale_color_manual(values = c("Good" = "#2196F3", "Bad" = "#F44336")) +
+  labs(
+    title = "Duración del crédito vs Monto",
+    x = "Duración (meses)",
+    y = "Monto (DM)",
+    color = "Clase"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Preprocesamiento
+
+### ¿Por qué es necesario escalar?
+
+Las variables tienen rangos muy distintos:
+
+```{r rangos}
+datos %>%
+  select(-Class) %>%
+  summarise(across(everything(), list(min = min, max = max, media = mean))) %>%
+  pivot_longer(everything(), names_to = c("variable", "stat"), names_sep = "_") %>%
+  pivot_wider(names_from = stat, values_from = value)
+```
+
+Sin escalado, `Amount` (valores hasta 18,424) dominaría el cálculo de distancia
+frente a `Age` (valores entre 19 y 75).
+
+### Normalización Min-Max
+
+Se transforma cada variable al rango [0, 1]:
+
+```{r escalado}
+preproc <- preProcess(
+  datos %>% select(-Class),
+  method = "range"
+)
+
+datos_escalados <- predict(preproc, datos %>% select(-Class))
+datos_escalados$Class <- datos$Class
+
+# Verificar el rango resultante
+summary(datos_escalados %>% select(-Class))
+```
+
+---
+
+## División Train / Test
+
+Se separa el 70% de los datos para entrenamiento y el 30% para prueba.
+La partición se hace de forma **estratificada** para preservar la proporción de clases.
+
+```{r division}
+set.seed(42)
+
+indice <- createDataPartition(datos_escalados$Class, p = 0.7, list = FALSE)
+
+entrenamiento <- datos_escalados[indice, ]
+prueba        <- datos_escalados[-indice, ]
+
+cat("Entrenamiento:", nrow(entrenamiento), "instancias\n")
+cat("Prueba:       ", nrow(prueba), "instancias\n")
+```
+
+```{r proporcion-split}
+# Verificar que la proporción se preservó
+prop.table(table(entrenamiento$Class))
+prop.table(table(prueba$Class))
+```
+
+---
+
+## Construcción del Modelo
+
+### Modelo inicial con K = 5
+
+```{r modelo-k5}
+set.seed(42)
+
+control <- trainControl(method = "none")
+
+modelo_k5 <- train(
+  Class ~ .,
+  data      = entrenamiento,
+  method    = "knn",
+  trControl = control,
+  tuneGrid  = data.frame(k = 5)
+)
+
+modelo_k5
+```
+
+### Predicción en datos de prueba
+
+```{r prediccion}
+predicciones <- predict(modelo_k5, newdata = prueba)
+
+head(data.frame(
+  Real      = prueba$Class,
+  Predicho  = predicciones
+), 10)
+```
+
+---
+
+## Evaluación
+
+### Matriz de Confusión
+
+```{r confusion}
+conf_mat <- confusionMatrix(
+  data      = predicciones,
+  reference = prueba$Class,
+  positive  = "Bad"
+)
+
+conf_mat
+```
+
+### Interpretación de métricas
+
+```{r metricas}
+metricas <- data.frame(
+  Métrica   = c("Exactitud", "Precisión", "Recall (Sensibilidad)", "F1-Score", "Especificidad"),
+  Valor     = c(
+    conf_mat$overall["Accuracy"],
+    conf_mat$byClass["Precision"],
+    conf_mat$byClass["Sensitivity"],
+    conf_mat$byClass["F1"],
+    conf_mat$byClass["Specificity"]
+  )
+)
+
+metricas$Valor <- round(metricas$Valor, 3)
+metricas
+```
+
+> **Nota:** Con datos desbalanceados, la exactitud puede ser alta aunque el modelo
+> no detecte bien la clase minoritaria (`Bad`).
+> Se presta atención especial al **Recall** para la clase `Bad`.
+
+---
+
+## Efecto de K
+
+Se entrena el modelo con distintos valores de K para observar cómo cambia el desempeño.
+
+```{r efecto-k}
+set.seed(42)
+
+valores_k <- seq(1, 31, by = 2)  # Solo impares
+
+resultados_k <- lapply(valores_k, function(k) {
+  mod <- train(
+    Class ~ .,
+    data      = entrenamiento,
+    method    = "knn",
+    trControl = trainControl(method = "cv", number = 5),
+    tuneGrid  = data.frame(k = k)
+  )
+  data.frame(
+    k         = k,
+    Exactitud = max(mod$results$Accuracy)
+  )
+})
+
+resultados_k <- bind_rows(resultados_k)
+resultados_k
+```
+
+### Visualización del efecto de K
+
+```{r grafico-k}
+mejor_k <- resultados_k$k[which.max(resultados_k$Exactitud)]
+
+ggplot(resultados_k, aes(x = k, y = Exactitud)) +
+  geom_line(color = "#607D8B", linewidth = 1) +
+  geom_point(size = 2.5, color = "#607D8B") +
+  geom_vline(xintercept = mejor_k, linetype = "dashed", color = "#F44336") +
+  annotate("text", x = mejor_k + 1.2, y = min(resultados_k$Exactitud),
+           label = paste("K =", mejor_k), color = "#F44336", hjust = 0) +
+  labs(
+    title = "Exactitud según valor de K (validación cruzada 5-fold)",
+    x = "K",
+    y = "Exactitud promedio"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Modelo Final con el Mejor K
+
+```{r modelo-final}
+set.seed(42)
+
+modelo_final <- train(
+  Class ~ .,
+  data      = entrenamiento,
+  method    = "knn",
+  trControl = trainControl(method = "none"),
+  tuneGrid  = data.frame(k = mejor_k)
+)
+
+predicciones_final <- predict(modelo_final, newdata = prueba)
+
+conf_final <- confusionMatrix(
+  data      = predicciones_final,
+  reference = prueba$Class,
+  positive  = "Bad"
+)
+
+conf_final
+```
+
+### Comparación K = 5 vs mejor K
+
+```{r comparacion}
+data.frame(
+  Modelo      = c(paste("K =", 5), paste("K =", mejor_k)),
+  Exactitud   = c(
+    round(conf_mat$overall["Accuracy"], 3),
+    round(conf_final$overall["Accuracy"], 3)
+  ),
+  Recall_Bad  = c(
+    round(conf_mat$byClass["Sensitivity"], 3),
+    round(conf_final$byClass["Sensitivity"], 3)
+  ),
+  F1_Bad      = c(
+    round(conf_mat$byClass["F1"], 3),
+    round(conf_final$byClass["F1"], 3)
+  )
+)
+```
+
+---
+
+## Predicción sobre un nuevo cliente
+
+Se predice si un nuevo solicitante pagará o no el crédito.
+
+```{r nuevo-cliente}
+nuevo_cliente <- data.frame(
+  Age      = 35,
+  Amount   = 5000,
+  Duration = 24
+)
+
+# Escalar con el mismo preprocesador
+nuevo_escalado <- predict(preproc, nuevo_cliente)
+
+# Predecir clase y probabilidad
+clase_predicha <- predict(modelo_final, newdata = nuevo_escalado)
+probabilidad   <- predict(modelo_final, newdata = nuevo_escalado, type = "prob")
+
+cat("Clase predicha:", as.character(clase_predicha), "\n")
+cat("Probabilidad Good:", round(probabilidad$Good, 3), "\n")
+cat("Probabilidad Bad: ", round(probabilidad$Bad, 3),  "\n")
+```
+
+---
+
+## Resumen
+
+| Paso | Acción |
+|------|--------|
+| 1. Datos | Se cargó el dataset German Credit (1,000 clientes) |
+| 2. Exploración | Se identificó desbalance entre clases (Good / Bad) |
+| 3. Escalado | Se aplicó normalización Min-Max (rango [0, 1]) |
+| 4. División | 80% entrenamiento / 20% prueba, estratificado |
+| 5. Modelo | KNN entrenado con diferentes valores de K |
+| 6. Evaluación | Matriz de confusión, Exactitud, Recall, F1 |
+| 7. Predicción | Se clasificó un nuevo solicitante |
+
+> KNN es sensible al valor de K y **siempre** requiere escalado previo.
+> La elección del mejor K se hace evaluando con validación cruzada.

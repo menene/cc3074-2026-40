@@ -1,0 +1,777 @@
+---
+title: "Regresión Logística"
+author: "Erick Marroquín"
+date: "Semestre 01, 2026"
+output:
+  html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 9,
+  fig.height = 5
+)
+```
+
+---
+
+# Contexto del Problema
+
+TelConnect es una empresa de telecomunicaciones con 50,000 clientes activos.
+El equipo de retención detectó que aproximadamente 1 de cada 4 clientes cancela
+su suscripción cada trimestre — lo que el negocio llama churn.
+
+Retener un cliente cuesta 5 veces menos que adquirir uno nuevo. Por eso, el
+equipo de Marketing quiere anticiparse: si saben quién va a irse, pueden
+ofrecerle una promoción antes.
+
+Pregunta de negocio: ¿Podemos predecir, con las variables que ya tenemos,
+si un cliente va a cancelar en el próximo mes?
+
+Pregunta estadística: ¿Podemos construir un modelo que estime
+$P(\text{churn} = 1 \mid X_1, X_2, \ldots, X_n)$?
+
+---
+
+# Regresión Logística
+
+Antes de tocar datos, hay que entender por qué no usamos regresión lineal aquí.
+
+## El problema con predecir probabilidades directo
+
+La regresión lineal modela:
+
+$$\hat{y} = \beta_0 + \beta_1 X_1 + \cdots + \beta_n X_n$$
+
+Si queremos que $\hat{y}$ sea una probabilidad, necesitamos que:
+$$0 \leq \hat{y} \leq 1$$
+
+Pero la recta no tiene límites — puede predecir valores negativos o mayores a 1.
+Eso no tiene sentido como probabilidad.
+
+## La solución: la función sigmoide
+
+Tomamos la combinación lineal $z = \beta_0 + \beta_1 X_1 + \cdots + \beta_n X_n$
+y la "aplastamos" al intervalo $(0, 1)$ con la función sigmoide:
+
+$$\sigma(z) = \frac{1}{1 + e^{-z}}$$
+
+```{r sigmoid-plot}
+z   <- seq(-8, 8, length.out = 300)
+sig <- 1 / (1 + exp(-z))
+
+par(mar = c(4, 4, 2, 1))
+plot(z, sig, type = "l", lwd = 3, col = "#2c7bb6",
+     xlab = "z (combinación lineal)", ylab = "σ(z) — probabilidad",
+     main = "Función Sigmoide",
+     ylim = c(-0.05, 1.05))
+abline(h = c(0, 0.5, 1), lty = 2, col = "gray60")
+abline(v = 0, lty = 2, col = "gray60")
+points(0, 0.5, pch = 19, cex = 1.5, col = "#d7191c")
+text(0.3, 0.45, "σ(0) = 0.5", col = "#d7191c", font = 2)
+```
+
+**Propiedades clave:**
+
+| z | σ(z) | Interpretación |
+|---|------|----------------|
+| Muy negativo (−∞) | ≈ 0 | El evento casi no ocurre |
+| 0 | 0.5 | Indecisión — 50/50 |
+| Muy positivo (+∞) | ≈ 1 | El evento casi seguro ocurre |
+
+---
+
+# Los Datos
+
+## Generación del dataset
+
+Simulamos un dataset realista con 1,500 clientes y 8 variables.
+Los coeficientes de generación reflejan conocimiento de negocio real.
+
+```{r datos}
+set.seed(42)
+n <- 1500
+
+clientes <- data.frame(
+  edad             = sample(18:75, n, replace = TRUE),
+  ingresos         = round(rnorm(n, mean = 6500, sd = 2200)),
+  meses_contrato   = sample(1:84, n, replace = TRUE),
+  uso_mensual_gb   = round(rnorm(n, mean = 28, sd = 10), 1),
+  soporte_llamadas = rpois(n, lambda = 2),
+  reclamos         = rpois(n, lambda = 1),
+  plan_premium     = rbinom(n, 1, prob = 0.30),
+  descuento_activo = rbinom(n, 1, prob = 0.25)
+)
+
+# Función generadora de churn (verdad del terreno)
+# Factores que AUMENTAN churn:  más reclamos, más llamadas a soporte,
+#                                pocos meses de contrato, menor uso
+# Factores que REDUCEN churn:   plan premium, descuento activo
+z_real <- -3.5 +
+  0.015  * clientes$edad +
+  0.0001 * clientes$ingresos -
+  0.050  * clientes$meses_contrato +
+  0.020  * clientes$uso_mensual_gb +
+  0.450  * clientes$soporte_llamadas +
+  0.900  * clientes$reclamos -
+  0.700  * clientes$plan_premium -
+  0.500  * clientes$descuento_activo
+
+p_real            <- 1 / (1 + exp(-z_real))
+clientes$churn    <- rbinom(n, 1, prob = p_real)
+clientes$churn    <- factor(clientes$churn, levels = c(0, 1),
+                            labels = c("No", "Si"))
+```
+
+## Exploración inicial
+
+```{r exploracion}
+cat("=== Dimensiones ===\n")
+cat("Filas:", nrow(clientes), "  |  Columnas:", ncol(clientes), "\n\n")
+
+cat("=== Distribución de Churn ===\n")
+print(table(clientes$churn))
+cat("\nPorcentaje:\n")
+print(round(prop.table(table(clientes$churn)) * 100, 1))
+```
+
+```{r resumen}
+summary(clientes)
+```
+
+## Visualización exploratoria
+
+```{r eda-plots, fig.height=8}
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+
+# Reclamos por churn
+boxplot(reclamos ~ churn, data = clientes,
+        col = c("#74c2e1", "#f4a460"),
+        main = "Reclamos por Churn",
+        xlab = "Churn", ylab = "Reclamos")
+
+# Meses de contrato por churn
+boxplot(meses_contrato ~ churn, data = clientes,
+        col = c("#74c2e1", "#f4a460"),
+        main = "Antigüedad del Contrato",
+        xlab = "Churn", ylab = "Meses")
+
+# Llamadas a soporte por churn
+boxplot(soporte_llamadas ~ churn, data = clientes,
+        col = c("#74c2e1", "#f4a460"),
+        main = "Llamadas a Soporte",
+        xlab = "Churn", ylab = "Llamadas")
+
+# Edad por churn
+boxplot(edad ~ churn, data = clientes,
+        col = c("#74c2e1", "#f4a460"),
+        main = "Edad del Cliente",
+        xlab = "Churn", ylab = "Edad")
+
+# Plan premium
+t_plan <- table(clientes$plan_premium, clientes$churn)
+barplot(prop.table(t_plan, margin = 1) * 100,
+        beside = TRUE, col = c("#74c2e1", "#f4a460"),
+        main = "Plan Premium vs Churn",
+        ylab = "% dentro del grupo",
+        xlab = "Churn",
+        legend.text = c("Sin premium", "Con premium"),
+        args.legend = list(x = "topright", bty = "n"))
+
+# Descuento activo
+t_desc <- table(clientes$descuento_activo, clientes$churn)
+barplot(prop.table(t_desc, margin = 1) * 100,
+        beside = TRUE, col = c("#74c2e1", "#f4a460"),
+        main = "Descuento Activo vs Churn",
+        ylab = "% dentro del grupo",
+        xlab = "Churn",
+        legend.text = c("Sin descuento", "Con descuento"),
+        args.legend = list(x = "topright", bty = "n"))
+
+par(mfrow = c(1, 1))
+```
+
+> **Lectura del EDA:**  
+> - Clientes con más reclamos y más llamadas a soporte tienen mayor churn.  
+> - Clientes con contratos más antiguos tienden a quedarse.  
+> - Tener plan premium o descuento activo reduce el churn visiblemente.
+
+---
+
+# Preparación
+
+## División Train / Test
+
+```{r split}
+set.seed(42)
+idx   <- sample(1:n, size = floor(0.70 * n))
+train <- clientes[idx, ]
+test  <- clientes[-idx, ]
+
+cat("Train:", nrow(train), "filas\n")
+cat("Test: ", nrow(test),  "filas\n")
+cat("\nChurn en train:\n")
+print(prop.table(table(train$churn)))
+cat("\nChurn en test:\n")
+print(prop.table(table(test$churn)))
+```
+
+## Escalado de variables
+
+La regresión logística es **sensible a la escala**. Aunque `glm()` converge sin
+normalizar, estandarizar es obligatorio por dos razones:
+
+1. **Estabilidad numérica:** variables con rangos muy distintos (ej. `ingresos`
+en miles vs. `reclamos` en unidades) generan gradientes desbalanceados y pueden
+causar problemas de convergencia.
+2. **Comparabilidad de coeficientes:** sin escala común, no podemos comparar
+la magnitud de los $\beta$ entre variables — un coeficiente grande puede deberse
+simplemente a que la variable está en una escala pequeña.
+
+Aplicamos **estandarización z-score** ($\mu = 0$, $\sigma = 1$) a todas las
+variables numéricas continuas. Las variables binarias (`plan_premium`,
+`descuento_activo`) no se escalan — ya están en escala 0/1.
+
+**Importante:** calculamos media y desviación estándar **solo sobre train**
+y aplicamos esa misma transformación a test. Usar estadísticos de test para
+escalar sería data leakage.
+
+```{r escalado}
+vars_escalar <- c("edad", "ingresos", "meses_contrato",
+                  "uso_mensual_gb", "soporte_llamadas", "reclamos")
+
+# Calcular media y sd SOLO en train
+medias       <- sapply(train[, vars_escalar], mean)
+desviaciones <- sapply(train[, vars_escalar], sd)
+
+# Aplicar a train y test con los mismos parámetros
+train_s <- train
+test_s  <- test
+
+for (v in vars_escalar) {
+  train_s[[v]] <- (train[[v]] - medias[v]) / desviaciones[v]
+  test_s[[v]]  <- (test[[v]]  - medias[v]) / desviaciones[v]
+}
+
+cat("=== Variables escaladas (primeras filas de train) ===\n")
+print(round(head(train_s[, vars_escalar]), 3))
+```
+
+---
+
+# Los Cinco Modelos
+
+Construimos 5 modelos con distintas combinaciones de variables para explorar
+qué información es más útil y aprender sobre la interpretación de coeficientes.
+
+## Modelo 1 — Perfil Demográfico
+
+Solo usamos variables del cliente que no tienen que ver con su comportamiento.
+
+```{r m1}
+m1 <- glm(churn ~ edad + ingresos,
+          data = train_s, family = "binomial")
+summary(m1)
+```
+
+> **Interpretación:** Ninguna de estas dos variables resulta muy significativa
+> aislada. Eso tiene sentido: la edad y los ingresos no determinan directamente
+> si alguien cancela — lo que importa es *cómo se comporta*.
+
+## Modelo 2 — Comportamiento de Uso
+
+Variables que describen el consumo del servicio.
+
+```{r m2}
+m2 <- glm(churn ~ meses_contrato + uso_mensual_gb,
+          data = train_s, family = "binomial")
+summary(m2)
+```
+
+> **Interpretación:** `meses_contrato` tiene coeficiente negativo → más meses
+> en el contrato reduce el log-odds de churn. Un cliente antiguo es un cliente
+> leal. `uso_mensual_gb` tiene efecto positivo pero débil.
+
+## Modelo 3 — Señales de Insatisfacción
+
+Variables que capturan fricción con el servicio.
+
+```{r m3}
+m3 <- glm(churn ~ soporte_llamadas + reclamos,
+          data = train_s, family = "binomial")
+summary(m3)
+```
+
+> **Interpretación de coeficientes (log-odds → odds):**  
+> - `reclamos` ≈ `r round(coef(m3)["reclamos"], 3)` en log-odds.  
+>   En odds: $e^{`r round(coef(m3)["reclamos"], 3)`}$ = `r round(exp(coef(m3)["reclamos"]), 2)`.  
+>   Cada reclamo adicional multiplica los odds de churn por ≈ `r round(exp(coef(m3)["reclamos"]), 2)`.  
+> - `soporte_llamadas` también es altamente significativo.
+
+## Modelo 4 — Factores de Retención
+
+Variables que la empresa controla activamente.
+
+```{r m4}
+m4 <- glm(churn ~ plan_premium + descuento_activo,
+          data = train_s, family = "binomial")
+summary(m4)
+```
+
+> **Interpretación:** Ambos coeficientes son negativos → tanto el plan premium
+> como el descuento activo *reducen* la probabilidad de churn.  
+> El plan premium tiene un efecto más fuerte: $e^{`r round(coef(m4)["plan_premium"], 3)`}$ ≈ `r round(exp(coef(m4)["plan_premium"]), 2)` — los odds de churn se reducen a menos de la mitad para clientes premium.
+
+## Modelo 5 — Completo
+
+Todas las variables disponibles.
+
+```{r m5}
+m5 <- glm(churn ~ .,
+          data = train_s, family = "binomial")
+summary(m5)
+```
+
+> **Interpretación:** Aquí vemos el panorama completo.
+> Las variables más significativas son las que el EDA ya sugería:
+> `reclamos`, `soporte_llamadas`, `meses_contrato`, `plan_premium` y
+> `descuento_activo`. La `edad` y los `ingresos` pierden significancia
+> cuando están todas las variables juntas.
+
+---
+
+# Evaluación de los Modelos
+
+## Función de métricas
+
+```{r metricas-fn}
+evaluar <- function(modelo, datos_test, umbral = 0.5) {
+  probs <- predict(modelo, newdata = datos_test, type = "response")
+  pred  <- ifelse(probs >= umbral, "Si", "No")
+  real  <- datos_test$churn
+
+  TP <- sum(pred == "Si" & real == "Si")
+  TN <- sum(pred == "No" & real == "No")
+  FP <- sum(pred == "Si" & real == "No")
+  FN <- sum(pred == "No" & real == "Si")
+
+  accuracy  <- (TP + TN) / (TP + TN + FP + FN)
+  precision <- ifelse((TP + FP) == 0, NA, TP / (TP + FP))
+  recall    <- ifelse((TP + FN) == 0, NA, TP / (TP + FN))
+  f1        <- ifelse(is.na(precision) | is.na(recall), NA,
+                      2 * precision * recall / (precision + recall))
+
+  list(
+    probs     = probs,
+    TP = TP, TN = TN, FP = FP, FN = FN,
+    accuracy  = round(accuracy,  4),
+    precision = round(precision, 4),
+    recall    = round(recall,    4),
+    f1        = round(f1,        4)
+  )
+}
+```
+
+## Tabla comparativa (umbral = 0.5)
+
+```{r tabla-comparativa}
+modelos <- list(
+  "M1 — Demográfico"     = m1,
+  "M2 — Uso"             = m2,
+  "M3 — Insatisfacción"  = m3,
+  "M4 — Retención"       = m4,
+  "M5 — Completo"        = m5
+)
+
+resultados <- lapply(modelos, evaluar, datos_test = test_s, umbral = 0.5)
+
+tabla <- data.frame(
+  Modelo    = names(resultados),
+  Accuracy  = sapply(resultados, `[[`, "accuracy"),
+  Precision = sapply(resultados, `[[`, "precision"),
+  Recall    = sapply(resultados, `[[`, "recall"),
+  F1        = sapply(resultados, `[[`, "f1"),
+  TP        = sapply(resultados, `[[`, "TP"),
+  FP        = sapply(resultados, `[[`, "FP"),
+  FN        = sapply(resultados, `[[`, "FN"),
+  TN        = sapply(resultados, `[[`, "TN")
+)
+
+print(tabla, row.names = FALSE)
+```
+
+## Visualización de métricas principales
+
+```{r metricas-plot, fig.height=6}
+metricas_long <- data.frame(
+  Modelo  = rep(tabla$Modelo, 3),
+  Metrica = rep(c("Precision", "Recall", "F1"), each = nrow(tabla)),
+  Valor   = c(tabla$Precision, tabla$Recall, tabla$F1)
+)
+
+colores <- c("Precision" = "#2c7bb6", "Recall" = "#d7191c", "F1" = "#1a9641")
+
+par(mar = c(5, 5, 3, 8))
+x_pos <- barplot(
+  matrix(
+    c(tabla$Precision, tabla$Recall, tabla$F1),
+    nrow = 3, byrow = TRUE
+  ),
+  beside    = TRUE,
+  col       = colores,
+  names.arg = c("M1", "M2", "M3", "M4", "M5"),
+  ylim      = c(0, 1),
+  main      = "Comparación de Modelos — Umbral 0.5",
+  ylab      = "Valor",
+  xlab      = "Modelo",
+  las       = 1
+)
+legend("topright", legend = c("Precision", "Recall", "F1"),
+       fill = colores, bty = "n", inset = c(-0.15, 0))
+abline(h = seq(0, 1, 0.1), lty = 3, col = "gray80")
+```
+
+---
+
+# Matrices de Confusión
+
+Vamos a visualizar la matriz del modelo con mejor F1 y la del modelo completo.
+
+```{r conf-matrix, fig.height=5, fig.width=10}
+dibujar_matriz <- function(resultado, titulo) {
+  mat <- matrix(
+    c(resultado$TN, resultado$FP,
+      resultado$FN, resultado$TP),
+    nrow = 2,
+    dimnames = list(
+      "Predicho"  = c("No (pred)", "Si (pred)"),
+      "Real"      = c("No (real)", "Si (real)")
+    )
+  )
+
+  par(mar = c(3, 3, 3, 1))
+  image(1:2, 1:2,
+        matrix(c(resultado$TN, resultado$FN,
+                 resultado$FP, resultado$TP),
+               nrow = 2),
+        col   = colorRampPalette(c("#d9f0a3", "#31a354"))(20),
+        xaxt  = "n", yaxt = "n",
+        xlab  = "Clase Real", ylab = "Predicción",
+        main  = titulo)
+  axis(1, at = 1:2, labels = c("No", "Sí"))
+  axis(2, at = 1:2, labels = c("No", "Sí"), las = 1)
+  text(1, 1, paste0("VN\n", resultado$TN), cex = 1.6, font = 2)
+  text(2, 1, paste0("FN\n", resultado$FN), cex = 1.6, font = 2, col = "#d7191c")
+  text(1, 2, paste0("FP\n", resultado$FP), cex = 1.6, font = 2, col = "#d7191c")
+  text(2, 2, paste0("VP\n", resultado$TP), cex = 1.6, font = 2)
+}
+
+par(mfrow = c(1, 2))
+dibujar_matriz(resultados[["M3 — Insatisfacción"]], "M3 — Insatisfacción")
+dibujar_matriz(resultados[["M5 — Completo"]],       "M5 — Completo")
+par(mfrow = c(1, 1))
+```
+
+> **Lectura:**
+> - **VP** (verde, arriba derecha): predijimos churn y sí ocurrió. ✅  
+> - **VN** (verde, abajo izquierda): predijimos no-churn y no ocurrió. ✅  
+> - **FP** (rojo, abajo derecha): dijimos que se iba y se quedó. Costo: oferta innecesaria.  
+> - **FN** (rojo, arriba izquierda): no detectamos que se iba. Costo: perdemos el cliente.
+
+---
+
+# Análisis de Umbral
+
+El umbral de 0.5 es solo un punto de partida. Dependiendo del objetivo de
+negocio, podemos ajustarlo.
+
+## Trade-off Precisión — Recall para M5
+
+```{r umbral-analysis}
+umbrales <- seq(0.1, 0.9, by = 0.05)
+
+probs_m5 <- resultados[["M5 — Completo"]]$probs
+
+prec_vec   <- numeric(length(umbrales))
+rec_vec    <- numeric(length(umbrales))
+f1_vec     <- numeric(length(umbrales))
+acc_vec    <- numeric(length(umbrales))
+
+for (i in seq_along(umbrales)) {
+  res        <- evaluar(m5, test_s, umbral = umbrales[i])
+  prec_vec[i]  <- ifelse(is.na(res$precision), 0, res$precision)
+  rec_vec[i]   <- ifelse(is.na(res$recall),    0, res$recall)
+  f1_vec[i]    <- ifelse(is.na(res$f1),        0, res$f1)
+  acc_vec[i]   <- res$accuracy
+}
+
+par(mar = c(4, 4, 3, 1))
+plot(umbrales, rec_vec,  type = "l", lwd = 2.5, col = "#d7191c",
+     ylim = c(0, 1), xlab = "Umbral", ylab = "Valor",
+     main = "M5: Precisión, Recall y F1 según Umbral")
+lines(umbrales, prec_vec, lwd = 2.5, col = "#2c7bb6")
+lines(umbrales, f1_vec,   lwd = 2.5, col = "#1a9641", lty = 2)
+lines(umbrales, acc_vec,  lwd = 1.5, col = "gray50",  lty = 3)
+abline(v = 0.5, lty = 2, col = "gray70")
+legend("right", bty = "n",
+       legend = c("Recall", "Precision", "F1", "Accuracy"),
+       col    = c("#d7191c", "#2c7bb6", "#1a9641", "gray50"),
+       lwd    = c(2.5, 2.5, 2.5, 1.5),
+       lty    = c(1, 1, 2, 3))
+
+# Umbral que maximiza F1
+umbral_optimo_f1 <- umbrales[which.max(f1_vec)]
+cat("Umbral que maximiza F1:", umbral_optimo_f1, "\n")
+cat("F1 máximo:",              max(f1_vec),       "\n")
+```
+
+## Curva ROC
+
+La curva ROC muestra el trade-off entre **tasa de verdaderos positivos (Recall)**
+y **tasa de falsos positivos** para todos los umbrales posibles.
+
+```{r roc-curve, fig.height=6, fig.width=7}
+calcular_roc <- function(probs, real_labels, positivo = "Si") {
+  real_bin <- ifelse(real_labels == positivo, 1, 0)
+  umbs     <- sort(unique(probs), decreasing = TRUE)
+  tpr_v    <- numeric(length(umbs) + 2)
+  fpr_v    <- numeric(length(umbs) + 2)
+  tpr_v[1] <- 0; fpr_v[1] <- 0
+  for (i in seq_along(umbs)) {
+    pred_bin   <- ifelse(probs >= umbs[i], 1, 0)
+    tp         <- sum(pred_bin == 1 & real_bin == 1)
+    fp         <- sum(pred_bin == 1 & real_bin == 0)
+    fn         <- sum(pred_bin == 0 & real_bin == 1)
+    tn         <- sum(pred_bin == 0 & real_bin == 0)
+    tpr_v[i+1] <- tp / (tp + fn)
+    fpr_v[i+1] <- fp / (fp + tn)
+  }
+  tpr_v[length(tpr_v)] <- 1; fpr_v[length(fpr_v)] <- 1
+
+  # AUC por regla trapezoidal
+  auc <- sum(diff(fpr_v) * (tpr_v[-1] + tpr_v[-length(tpr_v)]) / 2)
+  list(tpr = tpr_v, fpr = fpr_v, auc = abs(auc))
+}
+
+# Calcular ROC para todos los modelos
+colores_roc <- c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00")
+nombres_roc <- names(modelos)
+aucs        <- numeric(length(modelos))
+
+par(mar = c(4, 4, 3, 1))
+plot(0:1, 0:1, type = "n", xlab = "Tasa Falsos Positivos (FPR)",
+     ylab = "Tasa Verdaderos Positivos (Recall)",
+     main = "Curvas ROC — Comparación de Modelos")
+abline(0, 1, lty = 2, col = "gray60")
+
+for (i in seq_along(modelos)) {
+  probs_i <- predict(modelos[[i]], newdata = test_s, type = "response")
+  roc_i   <- calcular_roc(probs_i, test$churn)
+  lines(roc_i$fpr, roc_i$tpr, col = colores_roc[i], lwd = 2.5)
+  aucs[i] <- roc_i$auc
+}
+
+legend("bottomright", bty = "n",
+       legend = paste0(c("M1","M2","M3","M4","M5"), " — AUC: ", round(aucs, 3)),
+       col    = colores_roc, lwd = 2.5)
+```
+
+```{r tabla-auc}
+tabla_auc <- data.frame(
+  Modelo = nombres_roc,
+  AUC    = round(aucs, 4)
+)
+tabla_auc <- tabla_auc[order(-tabla_auc$AUC), ]
+print(tabla_auc, row.names = FALSE)
+```
+
+### ¿Cómo se lee esta gráfica?
+
+Cada punto de la curva corresponde a un umbral diferente. Al moverlo:
+
+- **Umbral bajo** → más clientes clasificados como churn → sube el recall pero también sube el FPR (más falsas alarmas).
+- **Umbral alto** → menos clientes clasificados como churn → baja el FPR pero también baja el recall.
+
+La curva traza ese recorrido completo de un extremo al otro.
+
+**La diagonal punteada** es la referencia de un modelo que clasifica al azar. Cualquier curva *por encima* de ella aporta información real. Lo que buscamos es que la curva se pegue lo más posible a la **esquina superior izquierda** — alto recall con bajo FPR.
+
+### ¿Qué es el AUC?
+
+El **AUC** (Area Under the Curve) resume toda la curva en un solo número:
+
+- **AUC = 1.0** → modelo perfecto.
+- **AUC = 0.5** → modelo sin información, equivale al azar.
+- **AUC > 0.8** → buen poder discriminativo para uso real.
+
+Su ventaja es que es **independiente del umbral** — mide la capacidad del modelo de rankear correctamente los positivos sobre los negativos sin importar el corte. Por eso es la métrica ideal para *comparar modelos* antes de tomar la decisión de negocio.
+
+### Interpretación por modelo
+
+| Modelo | AUC | Lectura |
+|--------|-----|---------|
+| **M5 — Completo** | **0.862** | El mejor. Domina a todos los demás en todos los umbrales. |
+| M3 — Insatisfacción | 0.763 | Bueno. Reclamos y llamadas a soporte son señales fuertes por sí solas. |
+| M2 — Uso | 0.761 | Bueno. La antigüedad del contrato captura bien la lealtad del cliente. |
+| M1 — Demográfico | 0.536 | Casi inútil. Edad e ingresos solos no explican el churn. |
+| M4 — Retención | 0.530 | Casi inútil de forma aislada. Plan premium y descuento son útiles *combinados* con otras variables, no solos. |
+
+> M1 y M4 están pegados a la diagonal — prácticamente no discriminan mejor que el azar en solitario. M5 está siempre por encima de todos, confirmando que ningún subconjunto de variables captura toda la información disponible.
+
+---
+
+# Interpretación de Coeficientes (M5)
+
+Antes de decidir, entendamos lo que el modelo completo nos dice.
+
+```{r coefs-m5}
+coefs   <- coef(m5)
+odds_r  <- exp(coefs)
+
+tabla_coefs <- data.frame(
+  Variable     = names(coefs),
+  Log_odds     = round(coefs, 4),
+  Odds_Ratio   = round(odds_r, 4),
+  Interpretacion = c(
+    "Intercepto (baseline)",
+    "Cada año más aumenta levemente el riesgo",
+    "Ingreso más alto → ligera reducción de riesgo",
+    "Cada mes más en contrato → menor riesgo de churn",
+    "Mayor uso → riesgo ligeramente mayor",
+    "Cada llamada a soporte multiplica el riesgo",
+    "Cada reclamo casi duplica el riesgo",
+    "Tener plan premium reduce el riesgo a la mitad",
+    "Descuento activo reduce el riesgo significativamente"
+  )
+)
+
+print(tabla_coefs, row.names = FALSE)
+```
+
+```{r coefs-plot, fig.height=5}
+coefs_sin_intercepto <- coefs[-1]
+colores_coef         <- ifelse(coefs_sin_intercepto > 0, "#d7191c", "#2c7bb6")
+
+par(mar = c(4, 10, 3, 1))
+barplot(
+  sort(coefs_sin_intercepto),
+  horiz   = TRUE,
+  col     = colores_coef[order(coefs_sin_intercepto)],
+  las     = 1,
+  xlab    = "Coeficiente (log-odds)",
+  main    = "Coeficientes del Modelo Completo (M5)",
+  xlim    = c(min(coefs_sin_intercepto) - 0.1, max(coefs_sin_intercepto) + 0.1)
+)
+abline(v = 0, lwd = 2, col = "gray40")
+```
+
+> **Regla de interpretación:**  
+> - Coeficiente positivo (rojo) → la variable **aumenta** el riesgo de churn.  
+> - Coeficiente negativo (azul) → la variable **disminuye** el riesgo de churn.  
+> - Un coeficiente en log-odds de $\beta$ equivale a multiplicar los *odds* por $e^\beta$.
+
+---
+
+# Resumen Final Comparativo
+
+```{r resumen-final}
+# Evaluar M5 con umbral óptimo para recall alto (0.3)
+res_m5_recall    <- evaluar(m5, test_s, umbral = 0.30)
+res_m5_precision <- evaluar(m5, test_s, umbral = 0.65)
+res_m5_f1        <- evaluar(m5, test_s, umbral = umbral_optimo_f1)
+
+escenarios <- data.frame(
+  Escenario   = c(
+    "M5 — Umbral 0.30 (max recall)",
+    paste0("M5 — Umbral ", umbral_optimo_f1, " (max F1)"),
+    "M5 — Umbral 0.65 (max precisión)"
+  ),
+  Umbral      = c(0.30, umbral_optimo_f1, 0.65),
+  Precision   = c(res_m5_recall$precision,    res_m5_f1$precision,    res_m5_precision$precision),
+  Recall      = c(res_m5_recall$recall,        res_m5_f1$recall,        res_m5_precision$recall),
+  F1          = c(res_m5_recall$f1,            res_m5_f1$f1,            res_m5_precision$f1),
+  VP          = c(res_m5_recall$TP,             res_m5_f1$TP,             res_m5_precision$TP),
+  FN          = c(res_m5_recall$FN,             res_m5_f1$FN,             res_m5_precision$FN),
+  FP          = c(res_m5_recall$FP,             res_m5_f1$FP,             res_m5_precision$FP)
+)
+
+print(escenarios, row.names = FALSE)
+```
+
+---
+
+# La Decisión Final
+
+Hasta aquí, los modelos. Ahora habla el negocio.
+
+## ¿Cuál es el costo de cada error?
+
+```{r decision-frame}
+costo_FN <- 150   # Perder un cliente → pérdida de ingreso mensual promedio
+costo_FP <- 20    # Ofrecer promoción innecesaria → costo de campaña
+
+cat("=== Análisis de Costo ===\n")
+cat("Costo por FN (cliente perdido):      Q", costo_FN, "\n")
+cat("Costo por FP (oferta innecesaria):   Q", costo_FP, "\n\n")
+
+for (i in 1:nrow(escenarios)) {
+  costo_total <- escenarios$FN[i] * costo_FN + escenarios$FP[i] * costo_FP
+  cat(sprintf("%-45s → Costo total: Q %d\n",
+              escenarios$Escenario[i], costo_total))
+}
+```
+
+## Recomendación
+
+### ¿Por qué maximizar recall en este caso?
+
+En este problema hay dos tipos de error posibles:
+
+- **Falso Negativo (FN):** el modelo dice *"este cliente se queda"* pero en
+  realidad **sí se fue**. No le ofrecimos nada — lo perdimos para siempre.
+- **Falso Positivo (FP):** el modelo dice *"este cliente se va"* pero en
+  realidad **se quedó**. Le mandamos una promoción innecesaria — gastamos Q20,
+  pero el cliente sigue ahí.
+
+Perder un cliente (FN) cuesta **Q150**. Mandarle una promo de más (FP) cuesta
+**Q20**. El FN es **7.5 veces más caro** que el FP.
+
+El recall mide exactamente lo que nos importa:
+
+$$\text{Recall} = \frac{VP}{VP + FN}$$
+
+De todos los clientes que **sí se fueron**, ¿cuántos detectamos? Maximizar
+recall = minimizar FN = no dejar escapar clientes en riesgo. El precio que
+pagamos es que suben los FP — le mandamos promos a algunos clientes que no las
+necesitaban. Pero eso es tolerable dado el costo.
+
+| Si el costo mayor es... | Optimizar... |
+|---|---|
+| FN (no detectar el evento) | **Recall** |
+| FP (falsa alarma) | **Precisión** |
+
+```{r decision-final, echo=FALSE, message=FALSE, warning=FALSE}
+cat("
+╔══════════════════════════════════════════════════════════╗
+║          DECISIÓN RECOMENDADA                            ║
+╠══════════════════════════════════════════════════════════╣
+║  Modelo:   M5 (todas las variables)                      ║
+║  Umbral:   0.30  (maximizar recall)                      ║
+║                                                          ║
+║  Justificación:                                          ║
+║  - El costo de perder un cliente (FN = Q150) es         ║
+║    7.5 veces mayor que el costo de una oferta            ║
+║    innecesaria (FP = Q20).                               ║
+║  - Preferimos detectar más clientes en riesgo            ║
+║    aunque eso genere algunas ofertas extra.              ║
+║  - AUC del modelo completo: mayor entre todos.          ║
+║                                                          ║
+║  Si el presupuesto de marketing es limitado:             ║
+║  → Subir el umbral a 0.45–0.50 para ser más selectivos. ║
+╚══════════════════════════════════════════════════════════╝
+")
+```

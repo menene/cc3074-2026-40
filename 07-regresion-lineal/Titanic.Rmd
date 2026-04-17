@@ -1,0 +1,217 @@
+---
+title: "\U0001F6A2 Titanic - Regresión Lineal"
+author: "Erick Marroquín"
+date: "2026-03-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# 1. Descripción del Dataset
+
+Utilizaremos el dataset **mtcars**, incluido en R.
+
+Este conjunto contiene información técnica de 32 automóviles, incluyendo variables relacionadas con desempeño del motor y eficiencia.
+
+Variable de interés:
+
+* **mpg**: millas por galón (consumo de combustible) → variable continua.
+
+Algunas variables relevantes:
+
+* wt: peso del vehículo (en miles de libras)
+* hp: caballos de fuerza
+* disp: desplazamiento del motor
+* cyl: número de cilindros
+
+Pregunta de investigación:
+
+> ¿Qué variables explican el consumo de combustible (mpg)?
+
+---
+
+# 2. Repaso de Regresión Lineal
+
+La regresión lineal modela la relación entre una variable dependiente continua (Y) y una o más variables independientes (X).
+
+Modelo simple:
+
+[
+Y = \beta_0 + \beta_1 X + \varepsilon
+]
+
+Modelo múltiple:
+
+[
+Y = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + ... + \beta_k X_k + \varepsilon
+]
+
+Supuestos principales:
+
+1. Linealidad
+2. Independencia de errores
+3. Homocedasticidad
+4. Normalidad de residuos
+
+---
+
+# 3. Análisis Exploratorio
+
+```{r}
+data(mtcars)
+df <- mtcars
+
+str(df)
+summary(df)
+```
+
+## Matriz de correlación
+
+```{r}
+cor(df)
+```
+
+## Scatterplots principales
+
+```{r}
+par(mfrow=c(1,2))
+plot(df$wt, df$mpg,
+     main="mpg vs wt",
+     xlab="wt", ylab="mpg", pch=19)
+
+plot(df$hp, df$mpg,
+     main="mpg vs hp",
+     xlab="hp", ylab="mpg", pch=19)
+par(mfrow=c(1,1))
+```
+
+Observamos relaciones negativas claras.
+
+---
+
+# 4. Selección de Variables (2 Pares)
+
+Seleccionaremos dos pares para análisis comparativo:
+
+Par 1 (relación fuerte esperada):
+
+* mpg ~ wt
+
+Par 2 (relación moderada):
+
+* mpg ~ hp
+
+Justificación:
+
+* wt muestra alta correlación negativa con mpg.
+* hp también influye, pero podría ser menos fuerte que wt.
+
+---
+
+# 5. Pruebas de Supuestos
+
+Ajustamos ambos modelos simples:
+
+```{r}
+model_wt <- lm(mpg ~ wt, data=df)
+model_hp <- lm(mpg ~ hp, data=df)
+```
+
+## Linealidad
+
+```{r}
+par(mfrow=c(1,2))
+plot(model_wt$fitted.values, resid(model_wt), main="Residuos vs Ajustados (wt)")
+abline(h=0,col="red")
+
+plot(model_hp$fitted.values, resid(model_hp), main="Residuos vs Ajustados (hp)")
+abline(h=0,col="red")
+par(mfrow=c(1,1))
+```
+
+## Normalidad
+
+```{r}
+shapiro.test(resid(model_wt))
+shapiro.test(resid(model_hp))
+```
+
+## Homocedasticidad
+
+```{r}
+library(lmtest)
+bptest(model_wt)
+bptest(model_hp)
+```
+
+## Independencia
+
+```{r}
+dwtest(model_wt)
+dwtest(model_hp)
+```
+
+---
+
+# 6. Construcción del Modelo
+
+Modelo simple 1:
+
+```{r}
+summary(model_wt)
+```
+
+Modelo simple 2:
+
+```{r}
+summary(model_hp)
+```
+
+Modelo múltiple:
+
+```{r}
+model_multiple <- lm(mpg ~ wt + hp, data=df)
+summary(model_multiple)
+```
+
+Interpretamos:
+
+* Signo de coeficientes
+* Magnitud del efecto
+* R²
+* Significancia estadística
+
+---
+
+# 7. Validación del Modelo
+
+Utilizamos división train/test.
+
+```{r}
+library(caret)
+set.seed(123)
+trainIndex <- createDataPartition(df$mpg, p=0.7, list=FALSE)
+train <- df[trainIndex,]
+test <- df[-trainIndex,]
+
+model_final <- lm(mpg ~ wt + hp, data=train)
+
+pred <- predict(model_final, test)
+
+RMSE(pred, test$mpg)
+summary(model_final)$r.squared
+```
+
+Comparación:
+
+* RMSE mide error promedio.
+* R² mide proporción de variabilidad explicada.
+
+Conclusión esperada:
+
+* wt es el predictor más fuerte.
+* El modelo múltiple mejora ligeramente la explicación respecto a modelos simples.
+* Los supuestos deben validarse antes de confiar en el modelo.
